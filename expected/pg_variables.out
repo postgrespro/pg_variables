@@ -64,6 +64,18 @@ SELECT pgv_exists('vars', 'int1');
  t
 (1 row)
 
+SELECT pgv_exists('vars2');
+ pgv_exists 
+------------
+ f
+(1 row)
+
+SELECT pgv_exists('vars');
+ pgv_exists 
+------------
+ t
+(1 row)
+
 SELECT pgv_set_int('vars', 'intNULL', NULL);
  pgv_set_int 
 -------------
@@ -669,6 +681,12 @@ SELECT pgv_remove('vars', 'int1');
 
 SELECT pgv_get_int('vars', 'int1');
 ERROR:  unrecognized variable "int1"
+SELECT pgv_exists('vars');
+ pgv_exists 
+------------
+ t
+(1 row)
+
 SELECT pgv_remove('vars2');
  pgv_remove 
 ------------
@@ -677,6 +695,12 @@ SELECT pgv_remove('vars2');
 
 SELECT pgv_get_jsonb('vars2', 'j1');
 ERROR:  unrecognized package "vars2"
+SELECT pgv_exists('vars2');
+ pgv_exists 
+------------
+ f
+(1 row)
+
 SELECT * FROM pgv_list() order by package, name;
  package |   name   
 ---------+----------
@@ -705,6 +729,12 @@ SELECT pgv_free();
  pgv_free 
 ----------
  
+(1 row)
+
+SELECT pgv_exists('vars');
+ pgv_exists 
+------------
+ f
 (1 row)
 
 SELECT * FROM pgv_list() order by package, name;

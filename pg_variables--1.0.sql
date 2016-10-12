@@ -113,6 +113,11 @@ RETURNS bool
 AS 'MODULE_PATHNAME', 'variable_exists'
 LANGUAGE C VOLATILE;
 
+CREATE FUNCTION pgv_exists(package text)
+RETURNS bool
+AS 'MODULE_PATHNAME', 'package_exists'
+LANGUAGE C VOLATILE;
+
 CREATE FUNCTION pgv_remove(package text, name text)
 RETURNS void
 AS 'MODULE_PATHNAME', 'remove_variable'

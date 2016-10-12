@@ -145,6 +145,7 @@ Function | Returns | Description
 Function | Returns | Description
 -------- | ------- | -----------
 `pgv_exists(package text, name text)` | `bool` | Returns **true** if package and variable exists.
+`pgv_exists(package text)` | `bool` | Returns **true** if package exists.
 `pgv_remove(package text, name text)` | `void` | Removes the variable with the corresponding name. Required package and variable must exists, otherwise the error will be raised.
 `pgv_remove(package text)` | `void` | Removes the package and all package variables with the corresponding name. Required package must exists, otherwise the error will be raised.
 `pgv_free()` | `void` | Removes all packages and variables.

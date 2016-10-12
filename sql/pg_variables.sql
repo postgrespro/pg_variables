@@ -16,6 +16,8 @@ SELECT pgv_get_int('vars', 'int3');
 SELECT pgv_get_int('vars', 'int3', false);
 SELECT pgv_exists('vars', 'int3');
 SELECT pgv_exists('vars', 'int1');
+SELECT pgv_exists('vars2');
+SELECT pgv_exists('vars');
 
 SELECT pgv_set_int('vars', 'intNULL', NULL);
 SELECT pgv_get_int('vars', 'intNULL');
@@ -176,12 +178,15 @@ SELECT * FROM pgv_list() order by package, name;
 SELECT pgv_remove('vars', 'int3');
 SELECT pgv_remove('vars', 'int1');
 SELECT pgv_get_int('vars', 'int1');
+SELECT pgv_exists('vars');
 
 SELECT pgv_remove('vars2');
 SELECT pgv_get_jsonb('vars2', 'j1');
+SELECT pgv_exists('vars2');
 
 SELECT * FROM pgv_list() order by package, name;
 
 SELECT pgv_free();
+SELECT pgv_exists('vars');
 
 SELECT * FROM pgv_list() order by package, name;

@@ -52,6 +52,7 @@ PG_FUNCTION_INFO_V1(variable_select_by_values);
 
 /* Functions to work with packages */
 PG_FUNCTION_INFO_V1(variable_exists);
+PG_FUNCTION_INFO_V1(package_exists);
 PG_FUNCTION_INFO_V1(remove_variable);
 PG_FUNCTION_INFO_V1(remove_package);
 PG_FUNCTION_INFO_V1(remove_packages);
@@ -954,6 +955,28 @@ variable_exists(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(var_name, 1);
 
 	PG_RETURN_BOOL(found);
+}
+
+/*
+ * Check if package exists.
+ */
+Datum
+package_exists(PG_FUNCTION_ARGS)
+{
+	text	   *package_name;
+	bool		res;
+
+	if (PG_ARGISNULL(0))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("package name can not be NULL")));
+
+	package_name = PG_GETARG_TEXT_PP(0);
+
+	res = getPackageByName(package_name, false, false) != NULL;
+
+	PG_FREE_IF_COPY(package_name, 0);
+	PG_RETURN_BOOL(res);
 }
 
 /*
