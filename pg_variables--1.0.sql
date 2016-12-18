@@ -5,6 +5,18 @@
 
 -- Scalar variables functions
 
+CREATE FUNCTION pgv_set(package text, name text, value anynonarray)
+RETURNS void
+AS 'MODULE_PATHNAME', 'variable_set_any'
+LANGUAGE C VOLATILE;
+
+CREATE FUNCTION pgv_get(package text, name text, var_type anynonarray, strict bool default true)
+RETURNS anynonarray
+AS 'MODULE_PATHNAME', 'variable_get_any'
+LANGUAGE C VOLATILE;
+
+-- Deprecated scalar variables functions
+
 CREATE FUNCTION pgv_set_int(package text, name text, value int)
 RETURNS void
 AS 'MODULE_PATHNAME', 'variable_set_int'

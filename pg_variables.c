@@ -26,6 +26,10 @@
 PG_MODULE_MAGIC;
 
 /* Scalar variables functions */
+PG_FUNCTION_INFO_V1(variable_set_any);
+PG_FUNCTION_INFO_V1(variable_get_any);
+
+/* Deprecated scalar variables functions */
 PG_FUNCTION_INFO_V1(variable_set_int);
 PG_FUNCTION_INFO_V1(variable_get_int);
 PG_FUNCTION_INFO_V1(variable_set_text);
@@ -152,6 +156,53 @@ variable_get(text *package_name, text *var_name,
 
 	*is_null = scalar->is_null;
 	return scalar->value;
+}
+
+Datum
+variable_set_any(PG_FUNCTION_ARGS)
+{
+	text	*package_name;
+	text	*var_name;
+
+	CHECK_ARGS_FOR_NULL();
+
+	package_name = PG_GETARG_TEXT_PP(0);
+	var_name = PG_GETARG_TEXT_PP(1);
+
+	variable_set(package_name, var_name, get_fn_expr_argtype(fcinfo->flinfo, 2),
+				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
+				 PG_ARGISNULL(2));
+
+	PG_FREE_IF_COPY(package_name, 0);
+	PG_FREE_IF_COPY(var_name, 1);
+	PG_RETURN_VOID();
+}
+
+Datum
+variable_get_any(PG_FUNCTION_ARGS)
+{
+	text	   *package_name;
+	text	   *var_name;
+	bool		strict;
+	bool		is_null;
+	Datum		value;
+
+	CHECK_ARGS_FOR_NULL();
+
+	package_name = PG_GETARG_TEXT_PP(0);
+	var_name = PG_GETARG_TEXT_PP(1);
+	strict = PG_GETARG_BOOL(3);
+
+	value = variable_get(package_name, var_name,
+						 get_fn_expr_argtype(fcinfo->flinfo, 2),
+						 &is_null, strict);
+
+	PG_FREE_IF_COPY(package_name, 0);
+	PG_FREE_IF_COPY(var_name, 1);
+	if (!is_null)
+		PG_RETURN_DATUM(value);
+	else
+		PG_RETURN_NULL();
 }
 
 Datum

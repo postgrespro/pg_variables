@@ -7,7 +7,7 @@ EXTENSION = pg_variables
 DATA = pg_variables--1.0.sql
 PGFILEDESC = "pg_variables - sessional variables"
 
-REGRESS = pg_variables
+REGRESS = pg_variables pg_variables_any
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

@@ -9,9 +9,9 @@ Note that the module does **not support transactions and savepoints**. For
 example:
 
 ```sql
-SELECT pgv_set_int('vars', 'int1', 101);
+SELECT pgv_set('vars', 'int1', 101);
 BEGIN;
-SELECT pgv_set_int('vars', 'int2', 102);
+SELECT pgv_set('vars', 'int2', 102);
 ROLLBACK;
 
 SELECT * FROM pgv_list() order by package, name;
@@ -42,31 +42,40 @@ Typical installation procedure may look like this:
 The functions provided by the **pg_variables** module are shown in the tables
 below. The module supports the following scalar and record types.
 
-To use **pgv_get_()** functions required package and variable must exists. It is
-necessary to set variable with **pgv_set_()** functions to use **pgv_get_()**
-functions.
+To use **pgv_get()** function required package and variable must exists. It is
+necessary to set variable with **pgv_set()** function to use **pgv_get()**
+function.
 
 If a package does not exists you will get the following error:
 
 ```sql
-SELECT pgv_get_int('vars', 'int1');
+SELECT pgv_get('vars', 'int1', NULL::int);
 ERROR:  unrecognized package "vars"
 ```
 
 If a variable does not exists you will get the following error:
 
 ```sql
-SELECT pgv_get_int('vars', 'int1');
+SELECT pgv_get('vars', 'int1', NULL::int);
 ERROR:  unrecognized variable "int1"
 ```
 
-**pgv_get_()** functions check the variable type. If the variable type does not
+**pgv_get()** function check the variable type. If the variable type does not
 match with the function type the error will be raised:
 
 ```sql
-SELECT pgv_get_text('vars', 'int1');
+SELECT pgv_get('vars', 'int1', NULL::text);
 ERROR:  variable "int1" requires "integer" value
 ```
+
+## Scalar variables functions
+
+Function | Returns
+-------- | -------
+`pgv_set(package text, name text, value anynonarray)` | `void`
+`pgv_get(package text, name text, var_type anynonarray, strict bool default true)` | `anynonarray`
+
+## **Deprecated** scalar variables functions
 
 ### Integer variables
 
@@ -117,7 +126,7 @@ Function | Returns
 `pgv_set_jsonb(package text, name text, value jsonb)` | `void`
 `pgv_get_jsonb(package text, name text, strict bool default true)` | `jsonb`
 
-### Records
+## Record variables functions
 
 The following functions are provided by the module to work with collections of
 record types.
@@ -159,16 +168,16 @@ Note that **pgv_stats()** works only with the PostgreSQL 9.6 and newer.
 It is easy to use functions to work with scalar variables:
 
 ```sql
-SELECT pgv_set_int('vars', 'int1', 101);
-SELECT pgv_set_int('vars', 'int2', 102);
+SELECT pgv_set('vars', 'int1', 101);
+SELECT pgv_set('vars', 'int2', 102);
 
-SELECT pgv_get_int('vars', 'int1');
+SELECT pgv_get('vars', 'int1', NULL::int);
  pgv_get_int 
 -------------
          101
 (1 row)
 
-SELECT pgv_get_int('vars', 'int2');
+SELECT pgv_get('vars', 'int2', NULL::int);
  pgv_get_int 
 -------------
          102
