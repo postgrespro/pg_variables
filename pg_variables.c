@@ -1385,11 +1385,17 @@ ensurePackagesHashExists()
 	if (packagesHash)
 		return;
 
+#if PG_VERSION_NUM >= 110000
+	ModuleContext = AllocSetContextCreate(CacheMemoryContext,
+										  "pg_variables memory context",
+										  ALLOCSET_DEFAULT_SIZES);
+#else
 	ModuleContext = AllocSetContextCreate(CacheMemoryContext,
 										  "pg_variables memory context",
 										  ALLOCSET_DEFAULT_MINSIZE,
 										  ALLOCSET_DEFAULT_INITSIZE,
 										  ALLOCSET_DEFAULT_MAXSIZE);
+#endif
 
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(HashPackageEntry);
@@ -1441,11 +1447,20 @@ getPackageByName(text* name, bool create, bool strict)
 
 			sprintf(hash_name, "Variables hash for package \"%s\"", key);
 
+#if PG_VERSION_NUM >= 110000
+			package->hctx = AllocSetContextCreateExtended(ModuleContext,
+														  hash_name, 0,
+														  ALLOCSET_DEFAULT_MINSIZE,
+														  ALLOCSET_DEFAULT_INITSIZE,
+														  ALLOCSET_DEFAULT_MAXSIZE);
+#else
 			package->hctx = AllocSetContextCreate(ModuleContext,
 												  hash_name,
 												  ALLOCSET_DEFAULT_MINSIZE,
 												  ALLOCSET_DEFAULT_INITSIZE,
 												  ALLOCSET_DEFAULT_MAXSIZE);
+#endif
+
 			oldcxt = MemoryContextSwitchTo(package->hctx);
 
 			ctl.keysize = NAMEDATALEN;

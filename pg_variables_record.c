@@ -79,11 +79,21 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
 	sprintf(hash_name, "Records hash for variable \"%s\"", variable->name);
 
 	record = &(variable->value.record);
+
+#if PG_VERSION_NUM >= 110000
+	record->hctx = AllocSetContextCreateExtended(topctx,
+												 hash_name, 0,
+												 ALLOCSET_DEFAULT_MINSIZE,
+												 ALLOCSET_DEFAULT_INITSIZE,
+												 ALLOCSET_DEFAULT_MAXSIZE);
+#else
 	record->hctx = AllocSetContextCreate(topctx,
 										 hash_name,
 										 ALLOCSET_DEFAULT_MINSIZE,
 										 ALLOCSET_DEFAULT_INITSIZE,
 										 ALLOCSET_DEFAULT_MAXSIZE);
+#endif
+
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 	record->tupdesc = CreateTupleDescCopyConstr(tupdesc);
 
@@ -99,7 +109,7 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
 										HASH_FUNCTION | HASH_COMPARE);
 
 	/* Get hash and match functions for key type. */
-	keyid = record->tupdesc->attrs[0]->atttypid;
+	keyid = GetTupleDescAttr(record->tupdesc, 0)->atttypid;
 	typentry = lookup_type_cache(keyid,
 								 TYPECACHE_HASH_PROC_FINFO |
 								 TYPECACHE_CMP_PROC_FINFO);
@@ -142,8 +152,8 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 	/* Second, check columns type. */
 	for (i = 0; i < tupdesc->natts; i++)
 	{
-		Form_pg_attribute	attr1 = variable->value.record.tupdesc->attrs[i],
-							attr2 = tupdesc->attrs[i];
+		Form_pg_attribute	attr1 = GetTupleDescAttr(variable->value.record.tupdesc, i),
+							attr2 = GetTupleDescAttr(tupdesc, i);
 
 		if ((attr1->atttypid != attr2->atttypid)
 			|| (attr1->attndims != attr2->attndims)
@@ -163,7 +173,7 @@ check_record_key(HashVariableEntry *variable, Oid typid)
 {
 	Assert(variable->typid == RECORDOID);
 
-	if (variable->value.record.tupdesc->attrs[0]->atttypid != typid)
+	if (GetTupleDescAttr(variable->value.record.tupdesc, 0)->atttypid != typid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("requested value type differs from variable \"%s\" "

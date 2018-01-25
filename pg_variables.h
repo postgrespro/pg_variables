@@ -10,6 +10,8 @@
 #ifndef __PG_VARIABLES_H__
 #define __PG_VARIABLES_H__
 
+#include "pg_config.h"
+
 #include "access/htup.h"
 #include "access/tupdesc.h"
 #include "datatype/timestamp.h"
@@ -17,6 +19,13 @@
 #include "utils/hsearch.h"
 #include "utils/numeric.h"
 #include "utils/jsonb.h"
+
+/* Accessor for the i'th attribute of tupdesc. */
+#if PG_VERSION_NUM > 100000
+#define GetTupleDescAttr(tupdesc, i) (TupleDescAttr(tupdesc, i))
+#else
+#define GetTupleDescAttr(tupdesc, i) ((tupdesc)->attrs[(i)])
+#endif
 
 /* initial number of packages hashes */
 #define NUMPACKAGES 8
