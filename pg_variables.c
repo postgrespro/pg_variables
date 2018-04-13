@@ -12,6 +12,7 @@
 #include "funcapi.h"
 
 #include "access/htup_details.h"
+#include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "parser/scansup.h"
 #include "utils/builtins.h"
@@ -63,6 +64,8 @@ PG_FUNCTION_INFO_V1(remove_packages);
 PG_FUNCTION_INFO_V1(get_packages_and_variables);
 PG_FUNCTION_INFO_V1(get_packages_stats);
 
+extern void _PG_init(void);
+extern void _PG_fini(void);
 static void getKeyFromName(text *name, char *key);
 static void ensurePackagesHashExists();
 static HashPackageEntry *getPackageByName(text *name, bool create, bool strict);
@@ -72,6 +75,11 @@ static HashVariableEntry *getVariableByNameWithType(HTAB *variables,
 													Oid typid,
 													bool create,
 													bool strict);
+static HashVariableEntry *
+getVariableByNameWithTypeAndTrans(HashPackageEntry *package, text *name,
+				Oid typid, bool create, bool strict, bool is_transactional);
+static void
+create_savepoint(HashPackageEntry *package, HashVariableEntry *variable);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -92,24 +100,90 @@ static MemoryContext ModuleContext = NULL;
 static HashPackageEntry *LastPackage = NULL;
 /* Recent variable */
 static HashVariableEntry *LastVariable = NULL;
+/*
+ * List of variables, changed in top level transaction. Used to limit
+ * number of proceeded variables on start of transaction.
+ * NOTE that subtransactions affect ALL transactional variables, even if
+ * they haven't changed during transaction.
+ */
+static dlist_head *changedVars = NULL;
+
+static bool
+isVarChangedInTrans(HashVariableEntry  *variable)
+{
+	dlist_iter	iter;
+	if (!changedVars)
+		return false;
+	dlist_foreach(iter, changedVars)
+	{
+		ChangedVarsNode   *cvn;
+		cvn = dlist_container(ChangedVarsNode, node, iter.cur);
+		if (cvn->variable == variable)
+			return true;
+	}
+	return false;
+}
+
+static void
+freeChangedVars()
+{
+	MemoryContext		oldcxt;
+	Assert(ModuleContext && changedVars);
+	oldcxt = MemoryContextSwitchTo(ModuleContext);
+	while(!dlist_is_empty(changedVars)){
+		ChangedVarsNode *cvnToDelete;
+		cvnToDelete = dlist_container(	ChangedVarsNode, 
+										node,
+										dlist_pop_head_node(changedVars));
+		pfree(cvnToDelete);
+	}
+	pfree(changedVars);
+	changedVars = NULL;
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * The function deletes the variable only from the list,
+ * the variable itself continues to exist.
+ */
+static void
+deleteFromChangedVars(HashVariableEntry *variable)
+{
+	MemoryContext		oldcxt;
+	dlist_mutable_iter	miter;
+	Assert(ModuleContext && changedVars);
+	oldcxt = MemoryContextSwitchTo(ModuleContext);
+	dlist_foreach_modify(miter, changedVars)
+	{
+		ChangedVarsNode *cvn;
+		cvn = dlist_container(ChangedVarsNode, node, miter.cur);
+		if (cvn->variable == variable)
+		{
+			dlist_delete(miter.cur);
+			return;
+		}
+	}
+	MemoryContextSwitchTo(oldcxt);
+}
 
 /*
  * Set value of variable, typlen could be 0 if typbyval == true
  */
 static void
 variable_set(text *package_name, text *var_name,
-			 Oid typid, Datum value, bool is_null)
+			 Oid typid, Datum value, bool is_null, bool is_transactional)
 {
 	HashPackageEntry   *package;
 	HashVariableEntry  *variable;
 	ScalarVar		   *scalar;
+	MemoryContext		oldcxt;
 
 	package = getPackageByName(package_name, true, false);
-	variable = getVariableByNameWithType(package->variablesHash,
-										 var_name, typid, true, false);
+	oldcxt = MemoryContextSwitchTo(package->hctx);
+	variable = getVariableByNameWithTypeAndTrans(package, var_name, typid, true,
+												 false, is_transactional);
 
-	scalar = &variable->value.scalar;
-
+	scalar = &(get_actual_value_scalar(variable));
 	/* Release memory for variable */
 	if (scalar->typbyval == false && scalar->is_null == false)
 		pfree(DatumGetPointer(scalar->value));
@@ -117,15 +191,11 @@ variable_set(text *package_name, text *var_name,
 	scalar->is_null = is_null;
 	if (!scalar->is_null)
 	{
-		MemoryContext	oldcxt;
-		oldcxt = MemoryContextSwitchTo(package->hctx);
-
 		scalar->value = datumCopy(value, scalar->typbyval, scalar->typlen);
-
-		MemoryContextSwitchTo(oldcxt);
 	}
 	else
 		scalar->value = 0;
+	MemoryContextSwitchTo(oldcxt);
 }
 
 static Datum
@@ -151,9 +221,7 @@ variable_get(text *package_name, text *var_name,
 		*is_null = true;
 		return 0;
 	}
-
-	scalar = &(variable->value.scalar);
-
+	scalar = &get_actual_value_scalar(variable);
 	*is_null = scalar->is_null;
 	return scalar->value;
 }
@@ -163,15 +231,17 @@ variable_set_any(PG_FUNCTION_ARGS)
 {
 	text	*package_name;
 	text	*var_name;
+	bool	 is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, get_fn_expr_argtype(fcinfo->flinfo, 2),
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -210,15 +280,17 @@ variable_set_int(PG_FUNCTION_ARGS)
 {
 	text	*package_name;
 	text	*var_name;
+	bool	 is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, INT4OID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -256,15 +328,17 @@ variable_set_text(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
+	bool		is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, TEXTOID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -302,15 +376,17 @@ variable_set_numeric(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
+	bool		is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, NUMERICOID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -348,15 +424,17 @@ variable_set_timestamp(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
+	bool		is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, TIMESTAMPOID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -394,15 +472,17 @@ variable_set_timestamptz(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
+	bool		is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, TIMESTAMPTZOID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -440,15 +520,17 @@ variable_set_date(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
+	bool		is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, DATEOID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -486,15 +568,17 @@ variable_set_jsonb(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
+	bool		is_transactional;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	variable_set(package_name, var_name, JSONBOID,
 				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2));
+				 PG_ARGISNULL(2), is_transactional);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -535,6 +619,7 @@ variable_insert(PG_FUNCTION_ARGS)
 	HeapTupleHeader		rec;
 	HashPackageEntry   *package;
 	HashVariableEntry  *variable;
+	bool				is_transactional;
 
 	Oid			tupType;
 	int32		tupTypmod;
@@ -552,6 +637,7 @@ variable_insert(PG_FUNCTION_ARGS)
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
 	rec = PG_GETARG_HEAPTUPLEHEADER(2);
+	is_transactional = PG_GETARG_BOOL(3);
 
 	/* Get cached package */
 	if (LastPackage == NULL ||
@@ -572,21 +658,35 @@ variable_insert(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(var_name), LastVariable->name,
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
-		variable = getVariableByNameWithType(package->variablesHash,
-											 var_name, RECORDOID, true, false);
+		MemoryContext		oldcxt;
+		oldcxt = MemoryContextSwitchTo(package->hctx);
+		variable = getVariableByNameWithTypeAndTrans(package, var_name, 
+											 RECORDOID, true, false,
+											 is_transactional);
 		LastVariable = variable;
+		MemoryContextSwitchTo(oldcxt);
 	}
-	else
+	else if (LastVariable->is_transactional == is_transactional)
 		variable = LastVariable;
+	else
+	{
+		char				key[NAMEDATALEN];
+		getKeyFromName(var_name, key);
+		ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg(
+					  "variable \"%s\" already created as %sTRANSACTIONAL",
+					  key, LastVariable->is_transactional?"":"NOT ")));
+	}
 
 	/* Insert a record */
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
 	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 
-	if (!variable->value.record.tupdesc)
+	if (!get_actual_value_record(variable).tupdesc)
 	{
-		/*
+		/*/*
 		 * This is the first record for the var_name. Initialize attributes.
 		 */
 		init_attributes(variable, tupdesc, package->hctx);
@@ -768,7 +868,7 @@ variable_select(PG_FUNCTION_ARGS)
 		variable = getVariableByNameWithType(package->variablesHash,
 											 var_name, RECORDOID, false, true);
 
-		record = &(variable->value.record);
+		record = &get_actual_value_record(variable);
 
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -844,7 +944,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	if (!value_is_null)
 		check_record_key(variable, value_type);
 
-	record = &(variable->value.record);
+	record = &get_actual_value_record(variable);
 
 	/* Search a record */
 	k.value = value;
@@ -916,7 +1016,8 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		funcctx->tuple_desc = CreateTupleDescCopy(variable->value.record.tupdesc);
+		funcctx->tuple_desc = CreateTupleDescCopy(
+									get_actual_value_record(variable).tupdesc);
 
 		var = (VariableIteratorRec *) palloc(sizeof(VariableIteratorRec));
 		var->iterator = array_create_iterator(values, 0, NULL);
@@ -938,7 +1039,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		bool			found;
 		RecordVar	   *record;
 
-		record = &(var->variable->value.record);
+		record = &get_actual_value_record(var->variable);
 		/* Search a record */
 		k.value = value;
 		k.is_null = isnull;
@@ -962,14 +1063,34 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 	SRF_RETURN_DONE(funcctx);
 }
 
+/*
+ * Remove one entry from history of states of arg 'variable'
+ */
 static void
-clean_variable(HashVariableEntry *variable)
+clean_variable_current_state(HashVariableEntry *variable)
 {
+	ValueHistory 	   *history;
+	ValueHistoryEntry  *historyEntryToDelete;
 	if (variable->typid == RECORDOID)
 		clean_records(variable);
-	else if (variable->value.scalar.typbyval == false &&
-			 variable->value.scalar.is_null == false)
-		pfree(DatumGetPointer(variable->value.scalar.value));
+	else if (get_actual_value_scalar(variable).typbyval == false &&
+			 get_actual_value_scalar(variable).is_null == false)
+		pfree(DatumGetPointer(get_actual_value_scalar(variable).value));
+	history = &variable->data;
+	historyEntryToDelete = get_history_entry(dlist_pop_head_node(history));
+	pfree(historyEntryToDelete);
+}
+
+/*
+ * Remove all entries from history of states of arg 'variable'.
+ * DOES NOT remove 'variable' itself.
+ */
+static void
+clean_variable_all_states(HashVariableEntry *variable)
+{
+	while(!dlist_is_empty(&variable->data)){
+		clean_variable_current_state(variable);
+	}
 }
 
 /*
@@ -1061,7 +1182,7 @@ remove_variable(PG_FUNCTION_ARGS)
 	/* Remove variable from cache */
 	LastVariable = NULL;
 
-	clean_variable(variable);
+	clean_variable_all_states(variable);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -1131,8 +1252,9 @@ remove_packages(PG_FUNCTION_ARGS)
 	/* All packages and variables will be freed */
 	MemoryContextDelete(ModuleContext);
 
-	packagesHash = NULL;
+	packagesHash  = NULL;
 	ModuleContext = NULL;
+	changedVars   = NULL;
 
 	PG_RETURN_VOID();
 }
@@ -1144,6 +1266,7 @@ typedef struct
 {
 	char	*package;
 	char	*variable;
+	bool	 is_transactional;
 } VariableRec;
 
 /*
@@ -1208,6 +1331,7 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 
 					recs[nRecs].package = package->name;
 					recs[nRecs].variable = variable->name;
+					recs[nRecs].is_transactional = variable->is_transactional;
 					nRecs++;
 				}
 			}
@@ -1228,8 +1352,8 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 
 	if (funcctx->call_cntr < funcctx->max_calls)
 	{
-		Datum		values[2];
-		bool		nulls[2];
+		Datum		values[3];
+		bool		nulls[3];
 		HeapTuple	tuple;
 		Datum		result;
 		int			i = funcctx->call_cntr;
@@ -1240,6 +1364,7 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 
 		values[0] = PointerGetDatum(cstring_to_text(recs[i].package));
 		values[1] = PointerGetDatum(cstring_to_text(recs[i].variable));
+		values[2] = recs[i].is_transactional;
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
@@ -1263,7 +1388,11 @@ getMemoryTotalSpace(MemoryContext context, int level, Size *totalspace)
 
 	/* Examine the context itself */
 	memset(&totals, 0, sizeof(totals));
+# if PG_VERSION_NUM >= 110000
+	(*context->methods->stats) (context, NULL, NULL, &totals);
+# else
 	(*context->methods->stats) (context, level, false, &totals);
+# endif
 	*totalspace += totals.totalspace;
 
 	/*
@@ -1449,7 +1578,7 @@ getPackageByName(text* name, bool create, bool strict)
 
 #if PG_VERSION_NUM >= 110000
 			package->hctx = AllocSetContextCreateExtended(ModuleContext,
-														  hash_name, 0,
+														  hash_name,
 														  ALLOCSET_DEFAULT_MINSIZE,
 														  ALLOCSET_DEFAULT_INITSIZE,
 														  ALLOCSET_DEFAULT_MAXSIZE);
@@ -1481,6 +1610,11 @@ getPackageByName(text* name, bool create, bool strict)
 	return package;
 }
 
+/*
+ * Create a variable or return a pointer to existing one.
+ * Function is useful to request a value of existing variable and
+ * flag 'is_transactional' of this variable is unknown.
+ */
 static HashVariableEntry *
 getVariableByNameWithType(HTAB *variables, text *name, Oid typid,
 						  bool create, bool strict)
@@ -1517,14 +1651,19 @@ getVariableByNameWithType(HTAB *variables, text *name, Oid typid,
 		/* Variable entry was created, so initialize new variable. */
 		if (variable)
 		{
-			memset(&variable->value, 0, sizeof(variable->value));
+			ValueHistoryEntry *historyEntry;
+
+			memset(&variable->data, 0, sizeof(variable->data));
 			variable->typid = typid;
+			dlist_init(&(variable->data));
+			historyEntry = palloc0(sizeof(ValueHistoryEntry));
+			dlist_push_head(&variable->data, &historyEntry->node);
 			if (typid != RECORDOID)
 			{
-				get_typlenbyval(variable->typid,
-								&variable->value.scalar.typlen,
-								&variable->value.scalar.typbyval);
-				variable->value.scalar.is_null = true;
+				ScalarVar *scalar = &get_actual_value_scalar(variable);
+				get_typlenbyval(variable->typid, &scalar->typlen,
+								&scalar->typbyval);
+				scalar->is_null = true;
 			}
 		}
 		else if (strict)
@@ -1534,4 +1673,360 @@ getVariableByNameWithType(HTAB *variables, text *name, Oid typid,
 	}
 
 	return variable;
+}
+
+/*
+ * Create a variable or return a pointer to existing one.
+ * Function is useful to set new value to variable and
+ * flag 'is_transactional' is known.
+ */
+static HashVariableEntry *
+getVariableByNameWithTypeAndTrans(HashPackageEntry *package, text *name, Oid typid,
+						  bool create, bool strict, bool is_transactional)
+{
+	HashVariableEntry  *variable;
+	char				key[NAMEDATALEN];
+	bool				found;
+
+	getKeyFromName(name, key);
+
+	if (create)
+		variable = (HashVariableEntry *) hash_search(package->variablesHash,
+													 key, HASH_ENTER, &found);
+	else
+		variable = (HashVariableEntry *) hash_search(package->variablesHash,
+													 key, HASH_FIND, &found);
+
+	/* Check variable type */
+	if (found)
+	{
+		if (variable->typid != typid)
+		{
+			char   *var_type = DatumGetCString(DirectFunctionCall1(
+								regtypeout, ObjectIdGetDatum(variable->typid)));
+
+			ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("variable \"%s\" requires \"%s\" value",
+						key, var_type)));
+		}
+		if (variable->is_transactional!=is_transactional)
+		{
+			ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg(
+					  "variable \"%s\" already created as %sTRANSACTIONAL",
+					  key, variable->is_transactional?"":"NOT ")));
+		}
+
+		/*
+		 * Create savepoint only if we in top transaction.
+		 * Subtransactions manage it another way
+		 */
+		if (variable->is_transactional &&
+			!isVarChangedInTrans(variable) &&
+			GetCurrentTransactionNestLevel() < 2)
+		{
+			create_savepoint(package, variable);
+		}
+	}
+	else
+	{
+		/* Variable entry was created, so initialize new variable. */
+		if (variable)
+		{
+			ValueHistoryEntry  *historyEntry;
+			memset(&variable->data, 0, sizeof(variable->data));
+			variable->typid = typid;
+			variable->is_transactional = is_transactional;
+			dlist_init(&(variable->data));
+			historyEntry = palloc0(sizeof(ValueHistoryEntry));
+			dlist_push_head(&variable->data, &historyEntry->node);
+			if (typid != RECORDOID)
+			{
+				ScalarVar *scalar = &get_actual_value_scalar(variable);
+				get_typlenbyval(variable->typid, &scalar->typlen,
+								&scalar->typbyval);
+				scalar->is_null = true;
+			}
+		}
+		else if (strict)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unrecognized variable \"%s\"", key)));
+	}
+	/* If it is necessary, put variable to changedVars */
+	if (is_transactional)
+	{
+		MemoryContext oldcxt;
+		oldcxt = MemoryContextSwitchTo(ModuleContext);
+		if (!changedVars)
+		{
+			changedVars = palloc0(sizeof(dlist_head));
+			dlist_init(changedVars);
+		}
+		if (!isVarChangedInTrans(variable))
+		{
+			ChangedVarsNode *cvn = palloc0(sizeof(ChangedVarsNode));
+			cvn->package  = package;
+			cvn->variable = variable;
+			dlist_push_head(changedVars, &cvn->node);
+		}
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	return variable;
+}
+
+/*
+ * Rollback variable to previous state and remove current value
+ */
+static void
+rollback_savepoint(HashPackageEntry *package, HashVariableEntry *variable)
+{
+	clean_variable_current_state(variable);
+	/* Remove variable if it was created in rolled back transaction */
+	if (dlist_is_empty(&variable->data))
+	{
+		bool found;
+		hash_search(package->variablesHash, variable->name, HASH_REMOVE, &found);
+		deleteFromChangedVars(variable);
+	}
+}
+
+/*
+ * Create a new history point of variable and copy value from
+ * previous state
+ */
+static void
+create_savepoint(HashPackageEntry *package, HashVariableEntry *variable)
+{
+
+	if(variable->typid == RECORDOID)
+	{
+		insert_savepoint(variable, package->hctx);
+	}
+	else
+	{
+		ScalarVar		   *scalar;
+		ValueHistory 	   *history;
+		ValueHistoryEntry  *history_entry_new,
+						   *history_entry_prev;
+		MemoryContext		oldcxt;
+
+		oldcxt = MemoryContextSwitchTo(package->hctx);
+		history = &variable->data;
+		/* Release memory for variable */
+		history_entry_new = palloc0(sizeof(ValueHistoryEntry));
+		history_entry_prev = dlist_head_element(ValueHistoryEntry, node, history);
+		scalar = &history_entry_new->value.scalar;
+		*scalar = history_entry_prev->value.scalar;
+
+		if (!scalar->is_null)
+		{
+			scalar->value = datumCopy(
+				history_entry_prev->value.scalar.value,
+				scalar->typbyval,
+				scalar->typlen);
+		}
+		else
+			scalar->value = 0;
+		dlist_push_head(history, &history_entry_new->node);
+		MemoryContextSwitchTo(oldcxt);
+	}
+}
+
+/*
+ * Remove previous state of variable
+ */
+static void
+release_savepoint(HashVariableEntry *variable)
+{
+	ValueHistory 	   *history;
+
+	history = &variable->data;
+	if (dlist_has_next(history, dlist_head_node(history)))
+	{
+		ValueHistoryEntry  *historyEntryToDelete;
+		dlist_node		   *nodeToDelete;
+
+		nodeToDelete = dlist_next_node(history, dlist_head_node(history));
+		historyEntryToDelete = get_history_entry(nodeToDelete);
+
+		if (variable->typid == RECORDOID)
+		{
+			hash_destroy(historyEntryToDelete->value.record.rhash);
+			FreeTupleDesc(historyEntryToDelete->value.record.tupdesc);
+			/* All records will be freed */
+			MemoryContextDelete(historyEntryToDelete->value.record.hctx);
+		}
+		else if (historyEntryToDelete->value.scalar.typbyval == false &&
+				historyEntryToDelete->value.scalar.is_null == false)
+			pfree(DatumGetPointer(historyEntryToDelete->value.scalar.value));
+
+		dlist_delete(nodeToDelete);
+		pfree(historyEntryToDelete);
+	}
+}
+
+/*
+ * Possible actions on variables
+ */
+enum Action
+{
+	RELEASE_SAVEPOINT,
+	ROLLBACK_TO_SAVEPOINT,
+	CREATE_SAVEPOINT_SUB,
+	RELEASE_SAVEPOINT_SUB,
+	ROLLBACK_TO_SAVEPOINT_SUB
+};
+
+/*
+ * Iterate all variables from all packages and
+ * apply corresponding action on them
+ */
+static void
+apply_action_on_variables(enum Action action)
+{
+	HashPackageEntry   *package;
+	HashVariableEntry  *variable;
+	HASH_SEQ_STATUS		vstat,
+						pstat;
+
+	if (packagesHash)
+	{
+		/* Get packages list */
+		hash_seq_init(&pstat, packagesHash);
+		while ((package =
+			(HashPackageEntry *) hash_seq_search(&pstat)) != NULL)
+		{
+			/* Get variables list for package */
+			hash_seq_init(&vstat, package->variablesHash);
+			while ((variable =
+				(HashVariableEntry *) hash_seq_search(&vstat)) != NULL)
+			{
+				if(variable->is_transactional)
+				{
+					switch(action)
+					{
+						case CREATE_SAVEPOINT_SUB:
+							create_savepoint(package, variable);
+							break;
+						case RELEASE_SAVEPOINT_SUB:
+							release_savepoint(variable);
+							break;
+						case ROLLBACK_TO_SAVEPOINT_SUB:
+							rollback_savepoint(package, variable);
+							break;
+						default:
+							/* transactions proceeded in apply_action_on_changedVars() */
+							break;
+					}
+				}
+			}
+		}
+	}
+}
+
+/*
+ * Iterate variables from 'changedVars' list and
+ * apply corresponding action on them
+ */
+static void
+apply_action_on_changedVars(enum Action action)
+{
+	dlist_mutable_iter miter;
+	Assert(changedVars);
+	dlist_foreach_modify(miter, changedVars)
+	{
+		ChangedVarsNode *cvn = dlist_container(ChangedVarsNode, node, miter.cur);
+		switch(action)
+		{
+			case RELEASE_SAVEPOINT:
+				release_savepoint(cvn->variable);
+				break;
+			case ROLLBACK_TO_SAVEPOINT:
+				rollback_savepoint(cvn->package, cvn->variable);
+				break;
+			default:
+				/* subtransactions proceeded in apply_action_on_variables() */
+				break;
+		}
+	}
+}
+
+/*
+ * Intercept execution during subtransaction processing
+ * Since sub-transactions are created less often, but can have several levels
+ * of nesting, it's easier to create and roll back savepoints during events.
+ * Unfortunately, you have to savepoint/rollback all existing transact variables.
+ */
+static void
+pgv_sub_trans_callback(SubXactEvent event, SubTransactionId mySubid,
+						 SubTransactionId parentSubid, void *arg)
+{
+	switch (event){
+		case SUBXACT_EVENT_START_SUB:
+			apply_action_on_variables(CREATE_SAVEPOINT_SUB);
+			break;
+		case SUBXACT_EVENT_COMMIT_SUB:
+			apply_action_on_variables(RELEASE_SAVEPOINT_SUB);
+			break;
+		case SUBXACT_EVENT_ABORT_SUB:
+			apply_action_on_variables(ROLLBACK_TO_SAVEPOINT_SUB);
+			break;
+		case SUBXACT_EVENT_PRE_COMMIT_SUB:
+			break;
+	}
+}
+
+/*
+ * Intercept execution during transaction processing
+ * Since this event occurs frequently, it is necessary to limit
+ * the number of processed variables.
+ */
+static void
+pgv_trans_callback(XactEvent event, void *arg)
+{
+	if (changedVars)
+	{
+		switch (event){
+			case XACT_EVENT_PRE_COMMIT:
+				apply_action_on_changedVars(RELEASE_SAVEPOINT);
+				freeChangedVars();
+				break;
+			case XACT_EVENT_ABORT:
+				apply_action_on_changedVars(ROLLBACK_TO_SAVEPOINT);
+				freeChangedVars();
+				break;
+			case XACT_EVENT_PARALLEL_PRE_COMMIT:
+				apply_action_on_changedVars(RELEASE_SAVEPOINT);
+				freeChangedVars();
+				break;
+			case XACT_EVENT_PARALLEL_ABORT:
+				apply_action_on_changedVars(ROLLBACK_TO_SAVEPOINT);
+				freeChangedVars();
+				break;
+			default:
+				break;
+		}
+	}
+}
+
+/*
+ * Register callback function when module starts
+ */
+void _PG_init(void)
+{
+	RegisterXactCallback(pgv_trans_callback, NULL);
+	RegisterSubXactCallback(pgv_sub_trans_callback, NULL);
+}
+
+/*
+ * Unregister callback function when module unloads
+ */
+void _PG_fini(void)
+{
+	UnregisterXactCallback(pgv_trans_callback, NULL);
+	UnregisterSubXactCallback(pgv_sub_trans_callback, NULL);
 }

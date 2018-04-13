@@ -78,11 +78,11 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
 
 	sprintf(hash_name, "Records hash for variable \"%s\"", variable->name);
 
-	record = &(variable->value.record);
+	record = &(get_actual_value_record(variable));
 
 #if PG_VERSION_NUM >= 110000
 	record->hctx = AllocSetContextCreateExtended(topctx,
-												 hash_name, 0,
+												 hash_name,
 												 ALLOCSET_DEFAULT_MINSIZE,
 												 ALLOCSET_DEFAULT_INITSIZE,
 												 ALLOCSET_DEFAULT_MAXSIZE);
@@ -139,11 +139,13 @@ void
 check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 {
 	int			i;
+	RecordVar  *record;
 
 	Assert(variable->typid == RECORDOID);
 
+	record = &get_actual_value_record(variable);
 	/* First, check columns count. */
-	if (variable->value.record.tupdesc->natts != tupdesc->natts)
+	if (record->tupdesc->natts != tupdesc->natts)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("new record structure differs from variable \"%s\" "
@@ -152,7 +154,7 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 	/* Second, check columns type. */
 	for (i = 0; i < tupdesc->natts; i++)
 	{
-		Form_pg_attribute	attr1 = GetTupleDescAttr(variable->value.record.tupdesc, i),
+		Form_pg_attribute	attr1 = GetTupleDescAttr(record->tupdesc, i),
 							attr2 = GetTupleDescAttr(tupdesc, i);
 
 		if ((attr1->atttypid != attr2->atttypid)
@@ -171,9 +173,11 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 void
 check_record_key(HashVariableEntry *variable, Oid typid)
 {
+	RecordVar  *record;
 	Assert(variable->typid == RECORDOID);
+	record = &get_actual_value_record(variable);
 
-	if (GetTupleDescAttr(variable->value.record.tupdesc, 0)->atttypid != typid)
+	if (GetTupleDescAttr(record->tupdesc, 0)->atttypid != typid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("requested value type differs from variable \"%s\" "
@@ -199,7 +203,7 @@ insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &(variable->value.record);
+	record = &(get_actual_value_record(variable));
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
@@ -259,7 +263,7 @@ update_record(HashVariableEntry* variable, HeapTupleHeader tupleHeader)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &(variable->value.record);
+	record = &(get_actual_value_record(variable));
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
@@ -309,7 +313,7 @@ delete_record(HashVariableEntry *variable, Datum value, bool is_null)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &(variable->value.record);
+	record = &(get_actual_value_record(variable));
 
 	/* Delete a record */
 	k.value = value;
@@ -331,11 +335,53 @@ delete_record(HashVariableEntry *variable, Datum value, bool is_null)
 void
 clean_records(HashVariableEntry *variable)
 {
+	RecordVar *record;
 	Assert(variable->typid == RECORDOID);
 
-	hash_destroy(variable->value.record.rhash);
-	FreeTupleDesc(variable->value.record.tupdesc);
+	record = &get_actual_value_record(variable);
+	hash_destroy(record->rhash);
+	FreeTupleDesc(record->tupdesc);
 
 	/* All records will be freed */
-	MemoryContextDelete(variable->value.record.hctx);
+	MemoryContextDelete(record->hctx);
+}
+
+/*
+ * Create a new history point of record variable and copy all tulpes from
+ * previous state
+ */
+void
+insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
+{
+	RecordVar		   *record_prev,
+					   *record_new;
+	HashRecordEntry	   *item_prev,
+					   *item_new;
+	ValueHistoryEntry  *history_entry_new;
+	HASH_SEQ_STATUS	   *rstat;
+	bool				found;
+	MemoryContext		oldcxt;
+
+	Assert(variable->typid == RECORDOID);
+
+	/* Create new hstory entry */
+	record_prev = &(get_actual_value_record(variable));
+	oldcxt = MemoryContextSwitchTo(packageContext);
+	history_entry_new = palloc0(sizeof(ValueHistoryEntry));
+	record_new = &(history_entry_new->value.record);
+	dlist_push_head(&variable->data, &history_entry_new->node);
+	init_attributes(variable, record_prev->tupdesc, packageContext);
+
+	/* Copy previous history entry into the new one*/
+	rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
+	hash_seq_init(rstat, record_prev->rhash);
+	while((item_prev = (HashRecordEntry *) hash_seq_search(rstat)) !=NULL)
+	{
+		HashRecordKey		k;
+		k = item_prev->key;
+		item_new = (HashRecordEntry *) hash_search(record_new->rhash, &k,
+											HASH_ENTER, &found);
+		item_new->tuple = heap_copytuple(item_prev->tuple);
+	}
+	MemoryContextSwitchTo(oldcxt);
 }

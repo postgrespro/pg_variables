@@ -19,6 +19,7 @@
 #include "utils/hsearch.h"
 #include "utils/numeric.h"
 #include "utils/jsonb.h"
+#include "lib/ilist.h"
 
 /* Accessor for the i'th attribute of tupdesc. */
 #if PG_VERSION_NUM > 100000
@@ -59,16 +60,30 @@ typedef struct ScalarVar
 	int16			typlen;
 } ScalarVar;
 
-typedef struct HashVariableEntry
-{
-	char			name[NAMEDATALEN];
+/* List node that stores one of the variables states */
+typedef struct ValueHistoryEntry{
+	dlist_node		node;
 	union
 	{
 		ScalarVar	scalar;
 		RecordVar	record;
 	}				value;
+} ValueHistoryEntry;
 
+typedef dlist_head ValueHistory;
+
+/* Variable by itself */
+typedef struct HashVariableEntry
+{
+	char			name[NAMEDATALEN];
+	/* Entry point to list with states of value */
+	ValueHistory 	data;
 	Oid				typid;
+	/*
+	 * The flag determines the further behavior of the variable.
+	 * Can be specified only when creating a variable.
+	 */
+	bool			is_transactional;
 } HashVariableEntry;
 
 typedef struct HashRecordKey
@@ -87,6 +102,14 @@ typedef struct HashRecordEntry
 	HeapTuple		tuple;
 } HashRecordEntry;
 
+/* Element of list with variables, changed within transaction */
+typedef struct ChangedVarsNode
+{
+	dlist_node			node;
+	HashPackageEntry   *package;
+	HashVariableEntry  *variable;
+} ChangedVarsNode;
+
 extern void init_attributes(HashVariableEntry* variable, TupleDesc tupdesc,
 							MemoryContext topctx);
 extern void check_attributes(HashVariableEntry *variable, TupleDesc tupdesc);
@@ -99,5 +122,16 @@ extern bool update_record(HashVariableEntry *variable,
 extern bool delete_record(HashVariableEntry* variable, Datum value,
 						  bool is_null);
 extern void clean_records(HashVariableEntry *variable);
+
+extern void insert_savepoint(HashVariableEntry *variable,
+							MemoryContext packageContext);
+
+/* Internal macros to manage with dlist structure */
+#define get_actual_value_scalar(variable) \
+	(dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.scalar
+#define get_actual_value_record(variable) \
+	(dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.record
+#define get_history_entry(node_ptr) \
+	dlist_container(ValueHistoryEntry, node, node_ptr)
 
 #endif   /* __PG_VARIABLES_H__ */

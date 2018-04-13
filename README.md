@@ -5,7 +5,7 @@
 The **pg_variables** module provides functions to work with variables of various
 types. Created variables live only in the current user session.
 
-Note that the module does **not support transactions and savepoints**. For
+Note that the module does **not support transactions and savepoints by default**. For
 example:
 
 ```sql
@@ -15,11 +15,27 @@ SELECT pgv_set('vars', 'int2', 102);
 ROLLBACK;
 
 SELECT * FROM pgv_list() order by package, name;
- package | name
----------+------
- vars    | int1
- vars    | int2
+ package | name | is_transactional
+---------+------+------------------
+ vars    | int1 | f
+ vars    | int2 | f
 (2 rows)
+```
+
+But if variable created with flag **is_transactional**, it does:
+```sql
+BEGIN;
+SELECT pgv_set('vars', 'trans_int', 101, true);
+SAVEPOINT sp1;
+SELECT pgv_set('vars', 'trans_int', 102, true);
+ROLLBACK TO sp1;
+COMMIT;
+SELECT pgv_get('vars', 'trans_int', NULL::int);
+
+ pgv_get
+---------
+     101
+(1 row)
 ```
 
 ## License
@@ -72,7 +88,7 @@ ERROR:  variable "int1" requires "integer" value
 
 Function | Returns
 -------- | -------
-`pgv_set(package text, name text, value anynonarray)` | `void`
+`pgv_set(package text, name text, value anynonarray, is_transactional bool default false)` | `void`
 `pgv_get(package text, name text, var_type anynonarray, strict bool default true)` | `anynonarray`
 
 ## **Deprecated** scalar variables functions
@@ -81,49 +97,49 @@ Function | Returns
 
 Function | Returns
 -------- | -------
-`pgv_set_int(package text, name text, value int)` | `void`
+`pgv_set_int(package text, name text, value int, is_transactional bool default false)` | `void`
 `pgv_get_int(package text, name text, strict bool default true)` | `int`
 
 ### Text variables
 
 Function | Returns
 -------- | -------
-`pgv_set_text(package text, name text, value text)` | `void`
+`pgv_set_text(package text, name text, value text, is_transactional bool default false)` | `void`
 `pgv_get_text(package text, name text, strict bool default true)` | `text`
 
 ### Numeric variables
 
 Function | Returns
 -------- | -------
-`pgv_set_numeric(package text, name text, value numeric)` | `void`
+`pgv_set_numeric(package text, name text, value numeric, is_transactional bool default false)` | `void`
 `pgv_get_numeric(package text, name text, strict bool default true)` | `numeric`
 
 ### Timestamp variables
 
 Function | Returns
 -------- | -------
-`pgv_set_timestamp(package text, name text, value timestamp)` | `void`
+`pgv_set_timestamp(package text, name text, value timestamp, is_transactional bool default false)` | `void`
 `pgv_get_timestamp(package text, name text, strict bool default true)` | `timestamp`
 
 ### Timestamp with timezone variables
 
 Function | Returns
 -------- | -------
-`pgv_set_timestamptz(package text, name text, value timestamptz)` | `void`
+`pgv_set_timestamptz(package text, name text, value timestamptz, is_transactional bool default false)` | `void`
 `pgv_get_timestamptz(package text, name text, strict bool default true)` | `timestamptz`
 
 ### Date variables
 
 Function | Returns
 -------- | -------
-`pgv_set_date(package text, name text, value date)` | `void`
+`pgv_set_date(package text, name text, value date, is_transactional bool default false)` | `void`
 `pgv_get_date(package text, name text, strict bool default true)` | `date`
 
 ### Jsonb variables
 
 Function | Returns
 -------- | -------
-`pgv_set_jsonb(package text, name text, value jsonb)` | `void`
+`pgv_set_jsonb(package text, name text, value jsonb, is_transactional bool default false)` | `void`
 `pgv_get_jsonb(package text, name text, strict bool default true)` | `jsonb`
 
 ## Record variables functions
@@ -142,7 +158,7 @@ raised.
 
 Function | Returns | Description
 -------- | ------- | -----------
-`pgv_insert(package text, name text, r record)` | `void` | Inserts a record to the variable collection. If package and variable do not exists they will be created. The first column of **r** will be a primary key. If exists a record with the same primary key the error will be raised. If this variable collection has other structure the error will be raised.
+`pgv_insert(package text, name text, r record, is_transactional bool default false)` | `void` | Inserts a record to the variable collection. If package and variable do not exists they will be created. The first column of **r** will be a primary key. If exists a record with the same primary key the error will be raised. If this variable collection has other structure the error will be raised.
 `pgv_update(package text, name text, r record)` | `boolean` | Updates a record with the corresponding primary key (the first column of **r** is a primary key). Returns **true** if a record was found. If this variable collection has other structure the error will be raised.
 `pgv_delete(package text, name text, value anynonarray)` | `boolean` | Deletes a record with the corresponding primary key (the first column of **r** is a primary key). Returns **true** if a record was found.
 `pgv_select(package text, name text)` | `set of record` | Returns the variable collection records.
@@ -158,7 +174,7 @@ Function | Returns | Description
 `pgv_remove(package text, name text)` | `void` | Removes the variable with the corresponding name. Required package and variable must exists, otherwise the error will be raised.
 `pgv_remove(package text)` | `void` | Removes the package and all package variables with the corresponding name. Required package must exists, otherwise the error will be raised.
 `pgv_free()` | `void` | Removes all packages and variables.
-`pgv_list()` | `table(package text, name text)` | Returns set of records of assigned packages and variables.
+`pgv_list()` | `table(package text, name text, is_transactional bool)` | Returns set of records of assigned packages and variables.
 `pgv_stats()` | `table(package text, used_memory bigint)` | Returns list of assigned packages and used memory in bytes.
 
 Note that **pgv_stats()** works only with the PostgreSQL 9.6 and newer.
@@ -172,13 +188,13 @@ SELECT pgv_set('vars', 'int1', 101);
 SELECT pgv_set('vars', 'int2', 102);
 
 SELECT pgv_get('vars', 'int1', NULL::int);
- pgv_get_int 
+ pgv_get_int
 -------------
          101
 (1 row)
 
 SELECT pgv_get('vars', 'int2', NULL::int);
- pgv_get_int 
+ pgv_get_int
 -------------
          102
 (1 row)
@@ -235,7 +251,7 @@ You can list packages and variables:
 
 ```sql
 SELECT * FROM pgv_list() order by package, name;
- package | name 
+ package | name
 ---------+------
  vars    | int1
  vars    | int2
@@ -253,7 +269,7 @@ SELECT * FROM pgv_stats() order by package;
 (1 row)
 ```
 
-You can delete variables or hole packages:
+You can delete variables or whole packages:
 
 ```sql
 SELECT pgv_remove('vars', 'int1');
@@ -264,3 +280,67 @@ You can delete all packages and variables:
 ```sql
 SELECT pgv_free();
 ```
+
+If you want variables with support of transactions and savepoints, you should add flag
+`is_transactional = true` as the last argument in functions `pgv_set()`
+or `pgv_insert()`.
+Following use cases describe behavior of transactional variables:
+```sql
+SELECT pgv_set('pack', 'var_text', 'before transaction block'::text, true);
+BEGIN;
+SELECT pgv_set('pack', 'var_text', 'before savepoint'::text, true);
+SAVEPOINT sp1;
+SELECT pgv_set('pack', 'var_text', 'savepoint sp1'::text, true);
+SELECT pgv_get('pack', 'var_text', NULL::text);
+SAVEPOINT sp2;
+SELECT pgv_set('pack', 'var_text', 'savepoint sp2'::text, true);
+RELEASE sp2;
+SELECT pgv_get('pack', 'var_text', NULL::text);
+    pgv_get
+---------------
+ savepoint sp2
+
+ROLLBACK TO sp1;
+SELECT pgv_get('pack', 'var_text', NULL::text);
+     pgv_get
+------------------
+ before savepoint
+(1 row)
+
+ROLLBACK;
+SELECT pgv_get('pack', 'var_text', NULL::text);
+         pgv_get
+--------------------------
+ before transaction block
+
+```
+If you create variable after `BEGIN` or `SAVEPOINT` and than rollback to previous state - variable will not be exist:
+```sql
+BEGIN;
+SAVEPOINT sp1;
+SAVEPOINT sp2;
+SELECT pgv_set('pack', 'var_int', 122, true);
+RELEASE SAVEPOINT sp2;
+SELECT pgv_get('pack', 'var_int', NULL::int);
+pgv_get
+---------
+     122
+(1 row)
+
+ROLLBACK TO sp1;
+SELECT pgv_get('pack','var_int', NULL::int);
+ERROR:  unrecognized variable "var_int"
+COMMIT;
+```
+If you created transactional variable once, you should use flag `is_transactional` every time when you want to change variable value by functions `pgv_set()`, `pgv_insert()` and deprecated setters (i.e. `pgv_set_int()`). If you try to change this option, you'll get an error:
+```sql
+SELECT pgv_insert('pack', 'var_record', row(123::int, 'text'::text), true);
+ pgv_insert
+------------
+
+(1 row)
+
+SELECT pgv_insert('pack', 'var_record', row(456::int, 'another text'::text));
+ERROR:  variable "var_record" already created as TRANSACTIONAL
+```
+Functions `pgv_update()` and `pgv_delete()` do not require this flag.
