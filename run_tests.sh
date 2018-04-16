@@ -8,6 +8,9 @@ set -ux
 
 status=0
 
+# show pg_config just in case
+pg_config
+
 # perform static analyzis
 scan-build --status-bugs make USE_PGXS=1 || status=$?
 
