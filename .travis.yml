@@ -1,0 +1,23 @@
+sudo: required
+
+language: c
+
+services:
+    - docker
+
+install:
+    - ./mk_dockerfile.sh
+    - docker-compose build
+
+script:
+    - docker-compose run $(bash <(curl -s https://codecov.io/env)) tests
+
+notifications:
+    email:
+        on_success: change
+        on_failure: always
+
+env:
+    - PG_VERSION=10
+    - PG_VERSION=9.6
+    - PG_VERSION=9.5
