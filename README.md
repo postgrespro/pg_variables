@@ -1,5 +1,7 @@
 # pg_variables - session variables with various types
 
+[![Build Status](https://travis-ci.org/postgrespro/pg_variables.svg?branch=master)](https://travis-ci.org/postgrespro/pg_variables)
+
 ## Introduction
 
 The **pg_variables** module provides functions to work with variables of various
