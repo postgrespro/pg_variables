@@ -1,7 +1,12 @@
 FROM postgres:${PG_VERSION}-alpine
 
 # Install dependencies
-RUN apk add --no-cache clang-analyzer clang perl make musl-dev gcc curl;
+RUN apk add --no-cache \
+	curl git \
+	make musl-dev gcc bison flex coreutils \
+	perl perl-utils perl-ipc-run \
+	zlib-dev libedit-dev \
+	clang-analyzer valgrind;
 
 # Environment
 ENV LANG=C.UTF-8 PGDATA=/pg/data
@@ -23,4 +28,4 @@ ADD . /pg/testdir
 WORKDIR /pg/testdir
 
 USER postgres
-ENTRYPOINT /run.sh
+ENTRYPOINT LEVEL=${LEVEL} /run.sh
