@@ -3,8 +3,8 @@ FROM postgres:${PG_VERSION}-alpine
 # Install dependencies
 RUN apk add --no-cache \
 	curl git \
+	perl perl-ipc-run \
 	make musl-dev gcc bison flex coreutils \
-	perl perl-utils perl-ipc-run \
 	zlib-dev libedit-dev \
 	clang-analyzer valgrind;
 
