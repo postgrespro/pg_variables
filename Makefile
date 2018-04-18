@@ -4,7 +4,12 @@ MODULE_big = pg_variables
 OBJS = pg_variables.o pg_variables_record.o $(WIN32RES)
 
 EXTENSION = pg_variables
-DATA = pg_variables--1.0.sql pg_variables--1.1.sql pg_variables--1.0--1.1.sql
+EXTVERSION = 1.1
+DATA = pg_variables--1.0--1.1.sql
+DATA_built = $(EXTENSION)--$(EXTVERSION).sql
+$(EXTENSION)--$(EXTVERSION).sql: init.sql
+	cat $^ > $@
+
 PGFILEDESC = "pg_variables - sessional variables"
 
 REGRESS = pg_variables pg_variables_any pg_variables_trans

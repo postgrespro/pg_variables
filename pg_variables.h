@@ -128,9 +128,9 @@ extern void insert_savepoint(HashVariableEntry *variable,
 
 /* Internal macros to manage with dlist structure */
 #define get_actual_value_scalar(variable) \
-	(dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.scalar
+	&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.scalar)
 #define get_actual_value_record(variable) \
-	(dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.record
+	&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.record)
 #define get_history_entry(node_ptr) \
 	dlist_container(ValueHistoryEntry, node, node_ptr)
 

@@ -78,7 +78,7 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
 
 	sprintf(hash_name, "Records hash for variable \"%s\"", variable->name);
 
-	record = &(get_actual_value_record(variable));
+	record = get_actual_value_record(variable);
 
 #if PG_VERSION_NUM >= 110000
 	record->hctx = AllocSetContextCreateExtended(topctx,
@@ -143,7 +143,7 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &get_actual_value_record(variable);
+	record = get_actual_value_record(variable);
 	/* First, check columns count. */
 	if (record->tupdesc->natts != tupdesc->natts)
 		ereport(ERROR,
@@ -175,7 +175,7 @@ check_record_key(HashVariableEntry *variable, Oid typid)
 {
 	RecordVar  *record;
 	Assert(variable->typid == RECORDOID);
-	record = &get_actual_value_record(variable);
+	record = get_actual_value_record(variable);
 
 	if (GetTupleDescAttr(record->tupdesc, 0)->atttypid != typid)
 		ereport(ERROR,
@@ -203,7 +203,7 @@ insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &(get_actual_value_record(variable));
+	record = get_actual_value_record(variable);
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
@@ -263,7 +263,7 @@ update_record(HashVariableEntry* variable, HeapTupleHeader tupleHeader)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &(get_actual_value_record(variable));
+	record = get_actual_value_record(variable);
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
@@ -313,7 +313,7 @@ delete_record(HashVariableEntry *variable, Datum value, bool is_null)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = &(get_actual_value_record(variable));
+	record = get_actual_value_record(variable);
 
 	/* Delete a record */
 	k.value = value;
@@ -338,10 +338,7 @@ clean_records(HashVariableEntry *variable)
 	RecordVar *record;
 	Assert(variable->typid == RECORDOID);
 
-	record = &get_actual_value_record(variable);
-	hash_destroy(record->rhash);
-	FreeTupleDesc(record->tupdesc);
-
+	record = get_actual_value_record(variable);
 	/* All records will be freed */
 	MemoryContextDelete(record->hctx);
 }
@@ -365,7 +362,7 @@ insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
 	Assert(variable->typid == RECORDOID);
 
 	/* Create new hstory entry */
-	record_prev = &(get_actual_value_record(variable));
+	record_prev = get_actual_value_record(variable);
 	oldcxt = MemoryContextSwitchTo(packageContext);
 	history_entry_new = palloc0(sizeof(ValueHistoryEntry));
 	record_new = &(history_entry_new->value.record);
@@ -377,7 +374,7 @@ insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
 	hash_seq_init(rstat, record_prev->rhash);
 	while((item_prev = (HashRecordEntry *) hash_seq_search(rstat)) !=NULL)
 	{
-		HashRecordKey		k;
+		HashRecordKey k;
 		k = item_prev->key;
 		item_new = (HashRecordEntry *) hash_search(record_new->rhash, &k,
 											HASH_ENTER, &found);

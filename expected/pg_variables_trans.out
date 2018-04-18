@@ -2328,8 +2328,9 @@ SELECT pgv_select('vars3', 'r1');
  (,strNULL)
  (2,)
  (1,str33)
+ (5,str55)
  (0,str00)
-(4 rows)
+(5 rows)
 
 SELECT pgv_select('vars3', 'r2');
  pgv_select 

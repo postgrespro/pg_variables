@@ -291,7 +291,6 @@ BEGIN;
 SELECT pgv_set('pack', 'var_text', 'before savepoint'::text, true);
 SAVEPOINT sp1;
 SELECT pgv_set('pack', 'var_text', 'savepoint sp1'::text, true);
-SELECT pgv_get('pack', 'var_text', NULL::text);
 SAVEPOINT sp2;
 SELECT pgv_set('pack', 'var_text', 'savepoint sp2'::text, true);
 RELEASE sp2;
