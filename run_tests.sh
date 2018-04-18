@@ -18,21 +18,9 @@ status=0
 pg_config
 
 
-# perform code checks if asked to
-if [ "$LEVEL" = "scan-build" ]; then
-
-	# perform static analyzis
-	scan-build --status-bugs make USE_PGXS=1 || status=$?
-
-	# something's wrong, exit now!
-	if [ $status -ne 0 ]; then exit 1; fi
-
-	# don't forget to "make clean"
-	make USE_PGXS=1 clean
-fi
-
-# build with cassert + valgrind support
-if [ "$LEVEL" = "hardcore" ] || [ "$LEVEL" = "nightmare" ]; then
+# rebuild PostgreSQL with cassert + valgrind support
+if [ "$LEVEL" = "hardcore" ] || \
+   [ "$LEVEL" = "nightmare" ]; then
 
 	set -e
 
@@ -75,6 +63,22 @@ if [ "$LEVEL" = "hardcore" ] || [ "$LEVEL" = "nightmare" ]; then
 
 	set +e
 fi
+
+# perform code checks if asked to
+if [ "$LEVEL" = "scan-build" ] || \
+   [ "$LEVEL" = "hardcore" ] || \
+   [ "$LEVEL" = "nightmare" ]; then
+
+	# perform static analyzis
+	scan-build --status-bugs make USE_PGXS=1 || status=$?
+
+	# something's wrong, exit now!
+	if [ $status -ne 0 ]; then exit 1; fi
+
+	# don't forget to "make clean"
+	make USE_PGXS=1 clean
+fi
+
 
 # build and install extension (using PG_CPPFLAGS and SHLIB_LINK for gcov)
 make USE_PGXS=1 PG_CPPFLAGS="-coverage" SHLIB_LINK="-coverage"
