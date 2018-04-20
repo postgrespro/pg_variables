@@ -28,7 +28,7 @@ if [ "$LEVEL" = "hardcore" ] || \
 	CUSTOM_PG_SRC=$PWD/postgresql
 
 	# here PG_VERSION is provided by postgres:X-alpine docker image
-	wget -O postgresql.tar.bz2 "https://ftp.postgresql.org/pub/source/v$PG_VERSION/postgresql-$PG_VERSION.tar.bz2"
+	curl "https://ftp.postgresql.org/pub/source/v$PG_VERSION/postgresql-$PG_VERSION.tar.bz2" -o postgresql.tar.bz2
 	echo "$PG_SHA256 *postgresql.tar.bz2" | sha256sum -c -
 
 	mkdir $CUSTOM_PG_SRC

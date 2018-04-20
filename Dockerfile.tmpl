@@ -2,7 +2,7 @@ FROM postgres:${PG_VERSION}-alpine
 
 # Install dependencies
 RUN apk add --no-cache \
-	curl git \
+	openssl curl \
 	perl perl-ipc-run \
 	make musl-dev gcc bison flex coreutils \
 	zlib-dev libedit-dev \
