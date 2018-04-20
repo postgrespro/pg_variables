@@ -50,7 +50,7 @@ if [ "$LEVEL" = "hardcore" ] || \
 		--enable-cassert \
 		--prefix=$CUSTOM_PG_BIN
 
-	make -s -j$(nproc) && make -s install
+	time make -s -j$(nproc) && make -s install
 
 	# override default PostgreSQL instance
 	export PATH=$CUSTOM_PG_BIN/bin:$PATH
