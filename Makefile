@@ -5,10 +5,8 @@ OBJS = pg_variables.o pg_variables_record.o $(WIN32RES)
 
 EXTENSION = pg_variables
 EXTVERSION = 1.1
-DATA = pg_variables--1.0--1.1.sql
+DATA = pg_variables--1.0.sql pg_variables--1.0--1.1.sql
 DATA_built = $(EXTENSION)--$(EXTVERSION).sql
-$(EXTENSION)--$(EXTVERSION).sql: init.sql
-	cat $^ > $@
 
 PGFILEDESC = "pg_variables - sessional variables"
 
@@ -24,3 +22,6 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+$(EXTENSION)--$(EXTVERSION).sql: $(DATA)
+	cat $^ > $@
