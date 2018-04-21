@@ -110,6 +110,14 @@ typedef struct ChangedVarsNode
 	HashVariableEntry  *variable;
 } ChangedVarsNode;
 
+/* Element of stack with 'changedVars' list heads*/
+typedef struct ChangedVarsStackNode
+{
+	dlist_node		node;
+	dlist_head	   *changedVarsList;
+	MemoryContext	ctx;
+} ChangedVarsStackNode;
+
 extern void init_attributes(HashVariableEntry* variable, TupleDesc tupdesc,
 							MemoryContext topctx);
 extern void check_attributes(HashVariableEntry *variable, TupleDesc tupdesc);

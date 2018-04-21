@@ -77,6 +77,10 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 						bool is_transactional);
 static void
 createSavepoint(HashPackageEntry *package, HashVariableEntry *variable);
+static bool
+isVarChangedInTrans(HashVariableEntry *variable);
+static void
+addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -97,100 +101,18 @@ static MemoryContext ModuleContext = NULL;
 static HashPackageEntry *LastPackage = NULL;
 /* Recent variable */
 static HashVariableEntry *LastVariable = NULL;
+
 /*
  * List of variables, changed in top level transaction. Used to limit
  * number of proceeded variables on start of transaction.
  */
 static dlist_head *changedVars = NULL;
 static MemoryContext changedVarsContext = NULL;
+static dlist_head *changedVarsStack = NULL;
+#define get_actual_changed_vars_list() \
+	(dlist_head_element(ChangedVarsStackNode, node, changedVarsStack))-> \
+		changedVarsList
 
-static bool
-isVarChangedInTrans(HashVariableEntry *variable)
-{
-	dlist_iter iter;
-	if (!changedVars)
-		return false;
-	dlist_foreach(iter, changedVars)
-	{
-		ChangedVarsNode *cvn;
-		cvn = dlist_container(ChangedVarsNode, node, iter.cur);
-		if (cvn->variable == variable)
-			return true;
-	}
-	return false;
-}
-
-
-
-static void
-freeChangedVars(void)
-{
-	if(changedVarsContext)
-	{
-		MemoryContextDelete(changedVarsContext);
-		changedVars = NULL;
-		changedVarsContext = NULL;
-	}
-}
-
-static void
-addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
-{
-	MemoryContext oldcxt;
-	if(!changedVarsContext)
-	{
-		char context_name[BUFSIZ];
-		sprintf(context_name, "Memory context for changedVars list");
-#if PG_VERSION_NUM >= 110000
-		changedVarsContext = AllocSetContextCreateExtended(ModuleContext,
-														context_name,
-														ALLOCSET_DEFAULT_MINSIZE,
-														ALLOCSET_DEFAULT_INITSIZE,
-														ALLOCSET_DEFAULT_MAXSIZE);
-#else
-		changedVarsContext = AllocSetContextCreate(ModuleContext,
-												context_name,
-												ALLOCSET_DEFAULT_MINSIZE,
-												ALLOCSET_DEFAULT_INITSIZE,
-												ALLOCSET_DEFAULT_MAXSIZE);
-#endif
-	}
-	oldcxt = MemoryContextSwitchTo(changedVarsContext);
-	if (!changedVars)
-	{
-		changedVars = palloc0(sizeof(dlist_head));
-		dlist_init(changedVars);
-	}
-	if (!isVarChangedInTrans(variable))
-	{
-		ChangedVarsNode *cvn = palloc0(sizeof(ChangedVarsNode));
-		cvn->package  = package;
-		cvn->variable = variable;
-		dlist_push_head(changedVars, &cvn->node);
-	}
-	MemoryContextSwitchTo(oldcxt);
-}
-
-/*
- * The function deletes the variable only from the list,
- * the variable itself continues to exist.
- */
-static void
-deleteFromChangedVars(HashVariableEntry *variable)
-{
-	dlist_mutable_iter miter;
-	Assert(changedVarsContext && changedVars);
-	dlist_foreach_modify(miter, changedVars)
-	{
-		ChangedVarsNode *cvn;
-		cvn = dlist_container(ChangedVarsNode, node, miter.cur);
-		if (cvn->variable == variable)
-		{
-			dlist_delete(miter.cur);
-			return;
-		}
-	}
-}
 
 /*
  * Set value of variable, typlen could be 0 if typbyval == true
@@ -705,11 +627,7 @@ variable_insert(PG_FUNCTION_ARGS)
 		}
 		if (!isVarChangedInTrans(variable) && variable->is_transactional)
 		{
-			int level = GetCurrentTransactionNestLevel();
-			while(level -- > 0)
-			{
-				createSavepoint(package, variable);
-			}
+			createSavepoint(package, variable);
 			addToChangedVars(package, variable);
 		}
 	}
@@ -795,11 +713,7 @@ variable_update(PG_FUNCTION_ARGS)
 
 	if (variable->is_transactional && !isVarChangedInTrans(variable))
 	{
-		int level = GetCurrentTransactionNestLevel();
-		while(level -- > 0)
-		{
-			createSavepoint(package, variable);
-		}
+		createSavepoint(package, variable);
 		addToChangedVars(package, variable);
 	}
 
@@ -876,11 +790,7 @@ variable_delete(PG_FUNCTION_ARGS)
 		variable = LastVariable;
 	if (variable->is_transactional && !isVarChangedInTrans(variable))
 	{
-		int level = GetCurrentTransactionNestLevel();
-		while(level -- > 0)
-		{
-			createSavepoint(package, variable);
-		}
+		createSavepoint(package, variable);
 		addToChangedVars(package, variable);
 	}
 
@@ -1749,17 +1659,14 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 		}
 
 		/*
-		 * Savepoint creates when variable changed in current transaction.
+		 * Savepoint must be created when variable changed in current
+		 * transaction.
 		 * For each transaction level there should be own savepoint.
 		 * New value should be stored in a last state.
 		 */
 		if (variable->is_transactional && !isVarChangedInTrans(variable))
 		{
-			int level = GetCurrentTransactionNestLevel();
-			while(level -- > 0)
-			{
-				createSavepoint(package, variable);
-			}
+			createSavepoint(package, variable);
 		}
 	}
 	else
@@ -1785,27 +1692,9 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 	}
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
-	{
 		addToChangedVars(package, variable);
-	}
 
 	return variable;
-}
-
-/*
- * Rollback variable to previous state and remove current value
- */
-static void
-rollbackSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
-{
-	cleanVariableCurrentState(variable);
-	/* Remove variable if it was created in rolled back transaction */
-	if (dlist_is_empty(&variable->data))
-	{
-		bool found;
-		hash_search(package->variablesHash, variable->name, HASH_REMOVE, &found);
-		deleteFromChangedVars(variable);
-	}
 }
 
 /*
@@ -1882,24 +1771,206 @@ releaseSavepoint(HashVariableEntry *variable)
 }
 
 /*
- * Possible actions on variables
+ * Rollback variable to previous state and remove current value
+ */
+static void
+rollbackSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
+{
+	cleanVariableCurrentState(variable);
+	/* Remove variable if it was created in rolled back transaction */
+	if (dlist_is_empty(&variable->data))
+	{
+		bool found;
+		hash_search(package->variablesHash, variable->name, HASH_REMOVE, &found);
+	}
+}
+
+/*
+ * Check if variable was changed in current transaction level
+ */
+static bool
+isVarChangedInTrans(HashVariableEntry *variable)
+{
+	dlist_iter iter;
+	dlist_head *changedVars;
+	if (!changedVarsStack)
+		return false;
+	changedVars = get_actual_changed_vars_list();
+	dlist_foreach(iter, changedVars)
+	{
+		ChangedVarsNode *cvn;
+		cvn = dlist_container(ChangedVarsNode, node, iter.cur);
+		if (cvn->variable == variable)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Create new list of variables, changed in current transaction level
+ */
+static void
+pushChangedVarsStack()
+{
+	MemoryContext oldcxt;
+	ChangedVarsStackNode *cvsn;
+	char child_context_name[BUFSIZ];
+	/*
+	 * Initialize changedVarsStack and create MemoryContext for it
+	 * if not done before.
+	 */
+	if(!changedVarsContext)
+	{
+		char top_context_name[BUFSIZ];
+		sprintf(top_context_name, "Memory context for changedVarsStack");
+#if PG_VERSION_NUM >= 110000
+		changedVarsContext = AllocSetContextCreateExtended(ModuleContext,
+														top_context_name,
+														ALLOCSET_DEFAULT_MINSIZE,
+														ALLOCSET_DEFAULT_INITSIZE,
+														ALLOCSET_DEFAULT_MAXSIZE);
+#else
+		changedVarsContext = AllocSetContextCreate(ModuleContext,
+												top_context_name,
+												ALLOCSET_DEFAULT_MINSIZE,
+												ALLOCSET_DEFAULT_INITSIZE,
+												ALLOCSET_DEFAULT_MAXSIZE);
+#endif
+	}
+	oldcxt = MemoryContextSwitchTo(changedVarsContext);
+	if (!changedVarsStack)
+	{
+		changedVarsStack = palloc0(sizeof(dlist_head));
+		dlist_init(changedVarsStack);
+	}
+	cvsn = palloc0(sizeof(ChangedVarsStackNode));
+	cvsn->changedVarsList = palloc0(sizeof(dlist_head));
+	sprintf(child_context_name,
+			"Memory context for changedVars list in %d xact level",
+			GetCurrentTransactionNestLevel());
+#if PG_VERSION_NUM >= 110000
+	cvsn->ctx = AllocSetContextCreateExtended(changedVarsContext,
+												child_context_name,
+												ALLOCSET_DEFAULT_MINSIZE,
+												ALLOCSET_DEFAULT_INITSIZE,
+												ALLOCSET_DEFAULT_MAXSIZE);
+#else
+	cvsn->ctx = AllocSetContextCreate(changedVarsContext,
+										child_context_name,
+										ALLOCSET_DEFAULT_MINSIZE,
+										ALLOCSET_DEFAULT_INITSIZE,
+										ALLOCSET_DEFAULT_MAXSIZE);
+#endif
+	dlist_init(cvsn->changedVarsList);
+	dlist_push_head(changedVarsStack, &cvsn->node);
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * Remove list of variables, changed in current transaction level
+ */
+static void
+popChangedVarsStack()
+{
+	if (changedVarsStack)
+	{
+		ChangedVarsStackNode *cvse;
+		Assert(!dlist_is_empty(changedVarsStack));
+		cvse = dlist_container(ChangedVarsStackNode, node,
+								dlist_pop_head_node(changedVarsStack));
+		MemoryContextDelete(cvse->ctx);
+		if (dlist_is_empty(changedVarsStack))
+		{
+			MemoryContextDelete(changedVarsContext);
+			changedVarsStack   = NULL;
+			changedVarsContext = NULL;
+		}
+	}
+}
+
+/*
+ * Add a variable to list of changed vars in current transaction level
+ */
+static void
+addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
+{
+	MemoryContext 			oldcxt;
+	ChangedVarsStackNode   *cvsn;
+	if (!changedVarsStack)
+	{
+		int level = GetCurrentTransactionNestLevel();
+		while(level -- > 0)
+		{
+			pushChangedVarsStack();
+		}
+	}
+	Assert(changedVarsStack && changedVarsContext);
+
+	if (!isVarChangedInTrans(variable))
+	{
+		ChangedVarsNode *cvn;
+		cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
+		oldcxt = MemoryContextSwitchTo(cvsn->ctx);
+		cvn = palloc0(sizeof(ChangedVarsNode));
+		cvn->package  = package;
+		cvn->variable = variable;
+		dlist_push_head(cvsn->changedVarsList, &cvn->node);
+		MemoryContextSwitchTo(oldcxt);
+	}
+}
+
+/*
+ * If variable was chenged in some subtransaction, it is considered that it was
+ * changed in parent transaction. So it is important to add this variable to
+ * list of changes of parent transaction. But if var was already changed in
+ * upper level, it has savepoint there, so we need to release it.
+ */
+static void
+lelevUpOrRelease()
+{
+	if (changedVarsStack)
+	{
+		dlist_iter iter;
+		ChangedVarsStackNode *bottom_list;
+		/* List removed from stack but we still can use it */
+		bottom_list = dlist_container(ChangedVarsStackNode, node,
+										dlist_pop_head_node(changedVarsStack));
+		Assert(!dlist_is_empty(changedVarsStack));
+		dlist_foreach(iter, bottom_list->changedVarsList)
+		{
+			ChangedVarsNode *cvn;
+			cvn = dlist_container(ChangedVarsNode, node, iter.cur);
+			if(isVarChangedInTrans(cvn->variable))
+				releaseSavepoint(cvn->variable);
+			else
+				addToChangedVars(cvn->package, cvn->variable);
+		}
+		MemoryContextDelete(bottom_list->ctx);
+	}
+}
+
+/*
+ * Possible actions on variables.
+ * Savepoints are created in setters so we don't need a CREATE_SAVEPOINT action.
  */
 typedef enum Action
 {
-	CREATE_SAVEPOINT,
 	RELEASE_SAVEPOINT,
 	ROLLBACK_TO_SAVEPOINT
 } Action;
 
 /*
- * Iterate variables from 'changedVars' list and
+ * Iterate variables from list of changes and
  * apply corresponding action on them
  */
 static void
 applyActionOnChangedVars(Action action)
 {
 	dlist_mutable_iter miter;
-	Assert(changedVars);
+	dlist_head *changedVars;
+	Assert(changedVarsStack);
+	changedVars = get_actual_changed_vars_list();
 	dlist_foreach_modify(miter, changedVars)
 	{
 		ChangedVarsNode *cvn = dlist_container(ChangedVarsNode, node, miter.cur);
@@ -1910,9 +1981,6 @@ applyActionOnChangedVars(Action action)
 				break;
 			case ROLLBACK_TO_SAVEPOINT:
 				rollbackSavepoint(cvn->package, cvn->variable);
-				break;
-			case CREATE_SAVEPOINT:
-				createSavepoint(cvn->package, cvn->variable);
 				break;
 		}
 	}
@@ -1925,18 +1993,19 @@ static void
 pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 						 SubTransactionId parentSubid, void *arg)
 {
-	if (changedVars)
+	if (changedVarsStack)
 	{
 		switch (event)
 		{
 			case SUBXACT_EVENT_START_SUB:
-				applyActionOnChangedVars(CREATE_SAVEPOINT);
+				pushChangedVarsStack();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
-				applyActionOnChangedVars(RELEASE_SAVEPOINT);
+				lelevUpOrRelease();
 				break;
 			case SUBXACT_EVENT_ABORT_SUB:
 				applyActionOnChangedVars(ROLLBACK_TO_SAVEPOINT);
+				popChangedVarsStack();
 				break;
 			case SUBXACT_EVENT_PRE_COMMIT_SUB:
 				break;
@@ -1950,26 +2019,29 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 static void
 pgvTransCallback(XactEvent event, void *arg)
 {
-	if (changedVars)
+	if (changedVarsStack)
 	{
 		switch (event)
 		{
 			case XACT_EVENT_PRE_COMMIT:
 				applyActionOnChangedVars(RELEASE_SAVEPOINT);
+				popChangedVarsStack();
 				break;
 			case XACT_EVENT_ABORT:
 				applyActionOnChangedVars(ROLLBACK_TO_SAVEPOINT);
+				popChangedVarsStack();
 				break;
 			case XACT_EVENT_PARALLEL_PRE_COMMIT:
 				applyActionOnChangedVars(RELEASE_SAVEPOINT);
+				popChangedVarsStack();
 				break;
 			case XACT_EVENT_PARALLEL_ABORT:
 				applyActionOnChangedVars(ROLLBACK_TO_SAVEPOINT);
+				popChangedVarsStack();
 				break;
 			default:
 				break;
 		}
-		freeChangedVars();
 	}
 }
 
