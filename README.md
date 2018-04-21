@@ -1,17 +1,12 @@
 # pg_variables - session variables with various types
 
-[![Build Status](https://travis-ci.org/postgrespro/pg_variables.svg?branch=master)](https://travis-ci.org/postgrespro/pg_variables)
-[![codecov](https://codecov.io/gh/postgrespro/pg_variables/branch/master/graph/badge.svg)](https://codecov.io/gh/postgrespro/pg_variables)
-[![GitHub license](https://img.shields.io/badge/license-PostgreSQL-blue.svg)](https://raw.githubusercontent.com/postgrespro/pg_variables/master/README.md)
-
 ## Introduction
 
 The **pg_variables** module provides functions to work with variables of various
 types. Created variables live only in the current user session.
-
-Note that the module does **not support transactions and savepoints by default**. For
-example:
-
+By default, created variables are not transactional (i.e. they are not affected
+by `BEGIN`, `COMMIT` or `ROLLBACK` statements). This, however, is customizable
+by argument `is_transactional` of `pgv_set()`:
 ```sql
 SELECT pgv_set('vars', 'int1', 101);
 BEGIN;
@@ -26,7 +21,7 @@ SELECT * FROM pgv_list() order by package, name;
 (2 rows)
 ```
 
-But if variable created with flag **is_transactional**, it does:
+But if variable created with flag **is_transactional**:
 ```sql
 BEGIN;
 SELECT pgv_set('vars', 'trans_int', 101, true);
@@ -255,11 +250,11 @@ You can list packages and variables:
 
 ```sql
 SELECT * FROM pgv_list() order by package, name;
- package | name
----------+------
- vars    | int1
- vars    | int2
- vars    | r1
+ package | name | is_transactional
+---------+------+------------------
+ vars    | int1 | f
+ vars    | int2 | f
+ vars    | r1   | f
 (3 rows)
 ```
 
@@ -285,8 +280,8 @@ You can delete all packages and variables:
 SELECT pgv_free();
 ```
 
-If you want variables with support of transactions and savepoints, you should add flag
-`is_transactional = true` as the last argument in functions `pgv_set()`
+If you want variables with support of transactions and savepoints, you should
+add flag `is_transactional = true` as the last argument in functions `pgv_set()`
 or `pgv_insert()`.
 Following use cases describe behavior of transactional variables:
 ```sql
@@ -317,7 +312,8 @@ SELECT pgv_get('pack', 'var_text', NULL::text);
  before transaction block
 
 ```
-If you create variable after `BEGIN` or `SAVEPOINT` and than rollback to previous state - variable will not be exist:
+If you create variable after `BEGIN` or `SAVEPOINT` statements and than rollback
+to previous state - variable will not be exist:
 ```sql
 BEGIN;
 SAVEPOINT sp1;
@@ -335,7 +331,10 @@ SELECT pgv_get('pack','var_int', NULL::int);
 ERROR:  unrecognized variable "var_int"
 COMMIT;
 ```
-If you created transactional variable once, you should use flag `is_transactional` every time when you want to change variable value by functions `pgv_set()`, `pgv_insert()` and deprecated setters (i.e. `pgv_set_int()`). If you try to change this option, you'll get an error:
+If you created transactional variable once, you should use flag `is_transactional`
+every time when you want to change variable value by functions `pgv_set()`,
+`pgv_insert()` and deprecated setters (i.e. `pgv_set_int()`). If you try to
+change this option, you'll get an error:
 ```sql
 SELECT pgv_insert('pack', 'var_record', row(123::int, 'text'::text), true);
  pgv_insert
