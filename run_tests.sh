@@ -44,7 +44,8 @@ if [ "$LEVEL" = "hardcore" ] || \
 	./configure \
 		CFLAGS='-O0 -ggdb3 -fno-omit-frame-pointer' \
 		--enable-cassert \
-		--prefix=$CUSTOM_PG_BIN
+		--prefix=$CUSTOM_PG_BIN \
+		--quiet
 
 	time make -s -j$(nproc) && make -s install
 
