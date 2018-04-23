@@ -110,8 +110,8 @@ static dlist_head *changedVars = NULL;
 static MemoryContext changedVarsContext = NULL;
 static dlist_head *changedVarsStack = NULL;
 #define get_actual_changed_vars_list() \
-	(dlist_head_element(ChangedVarsStackNode, node, changedVarsStack))-> \
-		changedVarsList
+	((dlist_head_element(ChangedVarsStackNode, node, changedVarsStack))-> \
+		changedVarsList)
 
 
 /*
@@ -981,7 +981,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		funcctx->tuple_desc = CreateTupleDescCopy(
-									*get_actual_value_record(variable).tupdesc);
+									(*get_actual_value_record(variable)).tupdesc);
 
 		var = (VariableIteratorRec *) palloc(sizeof(VariableIteratorRec));
 		var->iterator = array_create_iterator(values, 0, NULL);
