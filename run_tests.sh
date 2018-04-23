@@ -14,10 +14,6 @@ set -ux
 status=0
 
 
-# show pg_config just in case
-pg_config
-
-
 # rebuild PostgreSQL with cassert + valgrind support
 if [ "$LEVEL" = "hardcore" ] || \
    [ "$LEVEL" = "nightmare" ]; then
@@ -46,7 +42,7 @@ if [ "$LEVEL" = "hardcore" ] || \
 
 	# enable additional options
 	./configure \
-		--enable-debug \
+		CFLAGS='-O0 -ggdb3 -fno-omit-frame-pointer' \
 		--enable-cassert \
 		--prefix=$CUSTOM_PG_BIN
 
@@ -63,6 +59,9 @@ if [ "$LEVEL" = "hardcore" ] || \
 
 	set +e
 fi
+
+# show pg_config just in case
+pg_config
 
 # perform code checks if asked to
 if [ "$LEVEL" = "scan-build" ] || \
@@ -81,8 +80,7 @@ fi
 
 
 # build and install extension (using PG_CPPFLAGS and SHLIB_LINK for gcov)
-make USE_PGXS=1 PG_CPPFLAGS="-coverage" SHLIB_LINK="-coverage"
-make USE_PGXS=1 install
+make USE_PGXS=1 PG_CPPFLAGS="-coverage" SHLIB_LINK="-coverage" install
 
 # initialize database
 initdb -D $PGDATA
@@ -96,13 +94,16 @@ if [ "$LEVEL" = "nightmare" ]; then
 	ls $CUSTOM_PG_BIN/bin
 
 	valgrind \
+		--tool=memcheck \
 		--leak-check=no \
 		--time-stamp=yes \
+		--track-origins=yes \
 		--trace-children=yes \
 		--gen-suppressions=all \
 		--suppressions=$CUSTOM_PG_SRC/src/tools/valgrind.supp \
+		--suppressions=$PWD/valgrind.supp \
 		--log-file=/tmp/valgrind-%p.log \
-		postgres -l /tmp/postgres.log -w || status=$?
+		pg_ctl start -l /tmp/postgres.log -w || status=$?
 else
 	pg_ctl start -l /tmp/postgres.log -w || status=$?
 fi
@@ -132,7 +133,6 @@ if test -f regression.diffs; then cat regression.diffs; fi
 if [ $status -ne 0 ]; then exit 1; fi
 
 # generate *.gcov files
-rm -f *serialize.{gcda,gcno}
 gcov *.c *.h
 
 

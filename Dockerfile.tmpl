@@ -6,7 +6,12 @@ RUN apk add --no-cache \
 	perl perl-ipc-run \
 	make musl-dev gcc bison flex coreutils \
 	zlib-dev libedit-dev \
-	clang clang-analyzer valgrind;
+	clang clang-analyzer;
+
+# Install fresh valgrind
+RUN apk add valgrind \
+	--update-cache \
+	--repository http://dl-3.alpinelinux.org/alpine/edge/main;
 
 # Environment
 ENV LANG=C.UTF-8 PGDATA=/pg/data
