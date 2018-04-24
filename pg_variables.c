@@ -127,7 +127,6 @@ variable_set(text *package_name, text *var_name,
 	MemoryContext		oldcxt;
 
 	package = getPackageByName(package_name, true, false);
-	oldcxt = MemoryContextSwitchTo(package->hctx);
 	variable = createVariableInternal(package, var_name, typid,
 										is_transactional);
 
@@ -138,10 +137,13 @@ variable_set(text *package_name, text *var_name,
 
 	scalar->is_null = is_null;
 	if (!scalar->is_null)
+	{
+		oldcxt = MemoryContextSwitchTo(package->hctx);
 		scalar->value = datumCopy(value, scalar->typbyval, scalar->typlen);
+		MemoryContextSwitchTo(oldcxt);
+	}
 	else
 		scalar->value = 0;
-	MemoryContextSwitchTo(oldcxt);
 }
 
 static Datum
@@ -604,12 +606,9 @@ variable_insert(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(var_name), LastVariable->name,
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
-		MemoryContext		oldcxt;
-		oldcxt = MemoryContextSwitchTo(package->hctx);
 		variable = createVariableInternal(package, var_name, RECORDOID,
 										  is_transactional);
 		LastVariable = variable;
-		MemoryContextSwitchTo(oldcxt);
 	}
 	else
 	{
@@ -981,7 +980,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		funcctx->tuple_desc = CreateTupleDescCopy(
-									(*get_actual_value_record(variable)).tupdesc);
+									get_actual_value_record(variable)->tupdesc);
 
 		var = (VariableIteratorRec *) palloc(sizeof(VariableIteratorRec));
 		var->iterator = array_create_iterator(values, 0, NULL);
@@ -1675,11 +1674,11 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 		if (variable)
 		{
 			ValueHistoryEntry *historyEntry;
-			memset(&variable->data, 0, sizeof(variable->data));
 			variable->typid = typid;
 			variable->is_transactional = is_transactional;
 			dlist_init(&(variable->data));
-			historyEntry = palloc0(sizeof(ValueHistoryEntry));
+			historyEntry = MemoryContextAllocZero(package->hctx,
+												  sizeof(ValueHistoryEntry));
 			dlist_push_head(&variable->data, &historyEntry->node);
 			if (typid != RECORDOID)
 			{
@@ -1895,7 +1894,6 @@ popChangedVarsStack()
 static void
 addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 {
-	MemoryContext 			oldcxt;
 	ChangedVarsStackNode   *cvsn;
 	if (!changedVarsStack)
 	{
@@ -1911,12 +1909,10 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 	{
 		ChangedVarsNode *cvn;
 		cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
-		oldcxt = MemoryContextSwitchTo(cvsn->ctx);
-		cvn = palloc0(sizeof(ChangedVarsNode));
+		cvn = MemoryContextAllocZero(cvsn->ctx, sizeof(ChangedVarsNode));
 		cvn->package  = package;
 		cvn->variable = variable;
 		dlist_push_head(cvsn->changedVarsList, &cvn->node);
-		MemoryContextSwitchTo(oldcxt);
 	}
 }
 
@@ -1927,7 +1923,7 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
  * upper level, it has savepoint there, so we need to release it.
  */
 static void
-lelevUpOrRelease()
+levelUpOrRelease()
 {
 	if (changedVarsStack)
 	{
@@ -2001,7 +1997,7 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				pushChangedVarsStack();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
-				lelevUpOrRelease();
+				levelUpOrRelease();
 				break;
 			case SUBXACT_EVENT_ABORT_SUB:
 				applyActionOnChangedVars(ROLLBACK_TO_SAVEPOINT);

@@ -979,7 +979,7 @@ SELECT pgv_free();
  
 (1 row)
 
--- CHECK ROLLBACK AFTER COMMITING SUBTRANSACTION
+-- CHECK ROLLBACK AFTER COMMITTING SUBTRANSACTION
 BEGIN;
 SELECT pgv_set('vars', 'any1', 'before savepoint sp1'::text, true);
  pgv_set 
@@ -1319,7 +1319,7 @@ SELECT pgv_remove('vars');
  
 (1 row)
 
--- CHECK ROLLBACK AFTER COMMITING SUBTRANSACTION
+-- CHECK ROLLBACK AFTER COMMITTING SUBTRANSACTION
 SELECT pgv_set('vars', 'any1', 'before transaction block'::text, true);
  pgv_set 
 ---------

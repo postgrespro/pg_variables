@@ -361,7 +361,7 @@ insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
 
 	Assert(variable->typid == RECORDOID);
 
-	/* Create new hstory entry */
+	/* Create new history entry */
 	record_prev = get_actual_value_record(variable);
 	oldcxt = MemoryContextSwitchTo(packageContext);
 	history_entry_new = palloc0(sizeof(ValueHistoryEntry));
