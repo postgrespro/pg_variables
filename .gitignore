@@ -38,5 +38,5 @@ lib*.pc
 /Debug/
 /Release/
 /tmp_install/
-
 Dockerfile
+pg_variables--1.1.sql

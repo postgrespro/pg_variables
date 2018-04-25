@@ -174,6 +174,7 @@ SELECT pgv_select('vars2', 'j1');
 
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
+SELECT package FROM pgv_stats() order by package;
 
 SELECT pgv_remove('vars', 'int3');
 SELECT pgv_remove('vars', 'int1');

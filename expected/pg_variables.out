@@ -645,31 +645,39 @@ SELECT pgv_select('vars2', 'j1');
 ERROR:  variable "j1" requires "jsonb" value
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
- package |   name   
----------+----------
- vars    | d1
- vars    | d2
- vars    | dNULL
- vars    | int1
- vars    | int2
- vars    | intNULL
- vars    | jNULL
- vars    | num1
- vars    | num2
- vars    | numNULL
- vars    | str1
- vars    | str2
- vars    | strNULL
- vars    | ts1
- vars    | ts2
- vars    | tsNULL
- vars    | tstz1
- vars    | tstz2
- vars    | tstzNULL
- vars2   | j1
- vars2   | j2
- vars3   | r1
+ package |   name   | is_transactional 
+---------+----------+------------------
+ vars    | d1       | f
+ vars    | d2       | f
+ vars    | dNULL    | f
+ vars    | int1     | f
+ vars    | int2     | f
+ vars    | intNULL  | f
+ vars    | jNULL    | f
+ vars    | num1     | f
+ vars    | num2     | f
+ vars    | numNULL  | f
+ vars    | str1     | f
+ vars    | str2     | f
+ vars    | strNULL  | f
+ vars    | ts1      | f
+ vars    | ts2      | f
+ vars    | tsNULL   | f
+ vars    | tstz1    | f
+ vars    | tstz2    | f
+ vars    | tstzNULL | f
+ vars2   | j1       | f
+ vars2   | j2       | f
+ vars3   | r1       | f
 (22 rows)
+
+SELECT package FROM pgv_stats() order by package;
+ package 
+---------
+ vars
+ vars2
+ vars3
+(3 rows)
 
 SELECT pgv_remove('vars', 'int3');
 ERROR:  unrecognized variable "int3"
@@ -702,27 +710,27 @@ SELECT pgv_exists('vars2');
 (1 row)
 
 SELECT * FROM pgv_list() order by package, name;
- package |   name   
----------+----------
- vars    | d1
- vars    | d2
- vars    | dNULL
- vars    | int2
- vars    | intNULL
- vars    | jNULL
- vars    | num1
- vars    | num2
- vars    | numNULL
- vars    | str1
- vars    | str2
- vars    | strNULL
- vars    | ts1
- vars    | ts2
- vars    | tsNULL
- vars    | tstz1
- vars    | tstz2
- vars    | tstzNULL
- vars3   | r1
+ package |   name   | is_transactional 
+---------+----------+------------------
+ vars    | d1       | f
+ vars    | d2       | f
+ vars    | dNULL    | f
+ vars    | int2     | f
+ vars    | intNULL  | f
+ vars    | jNULL    | f
+ vars    | num1     | f
+ vars    | num2     | f
+ vars    | numNULL  | f
+ vars    | str1     | f
+ vars    | str2     | f
+ vars    | strNULL  | f
+ vars    | ts1      | f
+ vars    | ts2      | f
+ vars    | tsNULL   | f
+ vars    | tstz1    | f
+ vars    | tstz2    | f
+ vars    | tstzNULL | f
+ vars3   | r1       | f
 (19 rows)
 
 SELECT pgv_free();
@@ -738,7 +746,7 @@ SELECT pgv_exists('vars');
 (1 row)
 
 SELECT * FROM pgv_list() order by package, name;
- package | name 
----------+------
+ package | name | is_transactional 
+---------+------+------------------
 (0 rows)
 

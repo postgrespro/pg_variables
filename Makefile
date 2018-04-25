@@ -4,10 +4,13 @@ MODULE_big = pg_variables
 OBJS = pg_variables.o pg_variables_record.o $(WIN32RES)
 
 EXTENSION = pg_variables
-DATA = pg_variables--1.0.sql
+EXTVERSION = 1.1
+DATA = pg_variables--1.0.sql pg_variables--1.0--1.1.sql
+DATA_built = $(EXTENSION)--$(EXTVERSION).sql
+
 PGFILEDESC = "pg_variables - sessional variables"
 
-REGRESS = pg_variables pg_variables_any
+REGRESS = pg_variables pg_variables_any pg_variables_trans
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
@@ -19,3 +22,6 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+$(EXTENSION)--$(EXTVERSION).sql: $(DATA)
+	cat $^ > $@
