@@ -28,8 +28,8 @@
 static uint32
 record_hash(const void *key, Size keysize)
 {
-	HashRecordKey		k = *((const HashRecordKey *) key);
-	Datum				h;
+	HashRecordKey k = *((const HashRecordKey *) key);
+	Datum		h;
 
 	if (k.is_null)
 		return 0;
@@ -44,9 +44,9 @@ record_hash(const void *key, Size keysize)
 static int
 record_match(const void *key1, const void *key2, Size keysize)
 {
-	HashRecordKey		k1 = *((const HashRecordKey *) key1);
-	HashRecordKey		k2 = *((const HashRecordKey *) key2);
-	Datum				c;
+	HashRecordKey k1 = *((const HashRecordKey *) key1);
+	HashRecordKey k2 = *((const HashRecordKey *) key2);
+	Datum		c;
 
 	if (k1.is_null)
 	{
@@ -69,10 +69,10 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
 {
 	HASHCTL		ctl;
 	char		hash_name[BUFSIZ];
-	MemoryContext		oldcxt;
-	RecordVar		   *record;
-	TypeCacheEntry	   *typentry;
-	Oid					keyid;
+	MemoryContext oldcxt;
+	RecordVar  *record;
+	TypeCacheEntry *typentry;
+	Oid			keyid;
 
 	Assert(variable->typid == RECORDOID);
 
@@ -105,8 +105,8 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
 	ctl.match = record_match;
 
 	record->rhash = hash_create(hash_name, NUMVARIABLES, &ctl,
-										HASH_ELEM | HASH_CONTEXT |
-										HASH_FUNCTION | HASH_COMPARE);
+								HASH_ELEM | HASH_CONTEXT |
+								HASH_FUNCTION | HASH_COMPARE);
 
 	/* Get hash and match functions for key type. */
 	keyid = GetTupleDescAttr(record->tupdesc, 0)->atttypid;
@@ -154,8 +154,8 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 	/* Second, check columns type. */
 	for (i = 0; i < tupdesc->natts; i++)
 	{
-		Form_pg_attribute	attr1 = GetTupleDescAttr(record->tupdesc, i),
-							attr2 = GetTupleDescAttr(tupdesc, i);
+		Form_pg_attribute attr1 = GetTupleDescAttr(record->tupdesc, i),
+					attr2 = GetTupleDescAttr(tupdesc, i);
 
 		if ((attr1->atttypid != attr2->atttypid)
 			|| (attr1->attndims != attr2->attndims)
@@ -174,6 +174,7 @@ void
 check_record_key(HashVariableEntry *variable, Oid typid)
 {
 	RecordVar  *record;
+
 	Assert(variable->typid == RECORDOID);
 	record = get_actual_value_record(variable);
 
@@ -190,16 +191,16 @@ check_record_key(HashVariableEntry *variable, Oid typid)
 void
 insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
 {
-	TupleDesc			tupdesc;
-	HeapTuple			tuple;
-	int					tuple_len;
-	Datum				value;
-	bool				isnull;
-	RecordVar		   *record;
-	HashRecordKey		k;
-	HashRecordEntry	   *item;
-	bool				found;
-	MemoryContext		oldcxt;
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
+	int			tuple_len;
+	Datum		value;
+	bool		isnull;
+	RecordVar  *record;
+	HashRecordKey k;
+	HashRecordEntry *item;
+	bool		found;
+	MemoryContext oldcxt;
 
 	Assert(variable->typid == RECORDOID);
 
@@ -250,16 +251,16 @@ insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
 bool
 update_record(HashVariableEntry* variable, HeapTupleHeader tupleHeader)
 {
-	TupleDesc			tupdesc;
-	HeapTuple			tuple;
-	int					tuple_len;
-	Datum				value;
-	bool				isnull;
-	RecordVar		   *record;
-	HashRecordKey		k;
-	HashRecordEntry	   *item;
-	bool				found;
-	MemoryContext		oldcxt;
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
+	int			tuple_len;
+	Datum		value;
+	bool		isnull;
+	RecordVar  *record;
+	HashRecordKey k;
+	HashRecordEntry *item;
+	bool		found;
+	MemoryContext oldcxt;
 
 	Assert(variable->typid == RECORDOID);
 
@@ -306,10 +307,10 @@ update_record(HashVariableEntry* variable, HeapTupleHeader tupleHeader)
 bool
 delete_record(HashVariableEntry *variable, Datum value, bool is_null)
 {
-	HashRecordKey		k;
-	HashRecordEntry	   *item;
-	bool				found;
-	RecordVar		   *record;
+	HashRecordKey k;
+	HashRecordEntry *item;
+	bool		found;
+	RecordVar  *record;
 
 	Assert(variable->typid == RECORDOID);
 
@@ -335,7 +336,8 @@ delete_record(HashVariableEntry *variable, Datum value, bool is_null)
 void
 clean_records(HashVariableEntry *variable)
 {
-	RecordVar *record;
+	RecordVar  *record;
+
 	Assert(variable->typid == RECORDOID);
 
 	record = get_actual_value_record(variable);
@@ -350,14 +352,14 @@ clean_records(HashVariableEntry *variable)
 void
 insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
 {
-	RecordVar		   *record_prev,
-					   *record_new;
-	HashRecordEntry	   *item_prev,
-					   *item_new;
-	ValueHistoryEntry  *history_entry_new;
-	HASH_SEQ_STATUS	   *rstat;
-	bool				found;
-	MemoryContext		oldcxt;
+	RecordVar  *record_prev,
+			   *record_new;
+	HashRecordEntry *item_prev,
+			   *item_new;
+	ValueHistoryEntry *history_entry_new;
+	HASH_SEQ_STATUS *rstat;
+	bool		found;
+	MemoryContext oldcxt;
 
 	Assert(variable->typid == RECORDOID);
 
@@ -375,9 +377,10 @@ insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
 	while((item_prev = (HashRecordEntry *) hash_seq_search(rstat)) !=NULL)
 	{
 		HashRecordKey k;
+
 		k = item_prev->key;
 		item_new = (HashRecordEntry *) hash_search(record_new->rhash, &k,
-											HASH_ENTER, &found);
+												   HASH_ENTER, &found);
 		item_new->tuple = heap_copytuple(item_prev->tuple);
 	}
 	MemoryContextSwitchTo(oldcxt);

@@ -34,40 +34,40 @@
 
 typedef struct HashPackageEntry
 {
-	char			name[NAMEDATALEN];
-	HTAB		   *variablesHash;
+	char		name[NAMEDATALEN];
+	HTAB	   *variablesHash;
 	/* Memory context for package variables for easy memory release */
-	MemoryContext	hctx;
+	MemoryContext hctx;
 } HashPackageEntry;
 
 typedef struct RecordVar
 {
-	HTAB		   *rhash;
-	TupleDesc		tupdesc;
+	HTAB	   *rhash;
+	TupleDesc	tupdesc;
 	/* Memory context for records hash table for easy memory release */
-	MemoryContext	hctx;
+	MemoryContext hctx;
 	/* Hash function info */
-	FmgrInfo		hash_proc;
+	FmgrInfo	hash_proc;
 	/* Match function info */
-	FmgrInfo		cmp_proc;
+	FmgrInfo	cmp_proc;
 } RecordVar;
 
 typedef struct ScalarVar
 {
-	Datum			value;
-	bool			is_null;
-	bool			typbyval;
-	int16			typlen;
+	Datum		value;
+	bool		is_null;
+	bool		typbyval;
+	int16		typlen;
 } ScalarVar;
 
 /* List node that stores one of the variables states */
 typedef struct ValueHistoryEntry{
-	dlist_node		node;
+	dlist_node	node;
 	union
 	{
-		ScalarVar	scalar;
-		RecordVar	record;
-	}				value;
+		ScalarVar scalar;
+		RecordVar record;
+	}		value;
 } ValueHistoryEntry;
 
 typedef dlist_head ValueHistory;
@@ -75,15 +75,15 @@ typedef dlist_head ValueHistory;
 /* Variable by itself */
 typedef struct HashVariableEntry
 {
-	char			name[NAMEDATALEN];
+	char		name[NAMEDATALEN];
 	/* Entry point to list with states of value */
-	ValueHistory 	data;
-	Oid				typid;
+	ValueHistory data;
+	Oid			typid;
 	/*
 	 * The flag determines the further behavior of the variable.
 	 * Can be specified only when creating a variable.
 	 */
-	bool			is_transactional;
+	bool		is_transactional;
 } HashVariableEntry;
 
 typedef struct HashRecordKey
@@ -98,24 +98,24 @@ typedef struct HashRecordKey
 
 typedef struct HashRecordEntry
 {
-	HashRecordKey	key;
-	HeapTuple		tuple;
+	HashRecordKey key;
+	HeapTuple	tuple;
 } HashRecordEntry;
 
 /* Element of list with variables, changed within transaction */
 typedef struct ChangedVarsNode
 {
-	dlist_node			node;
-	HashPackageEntry   *package;
-	HashVariableEntry  *variable;
+	dlist_node	node;
+	HashPackageEntry *package;
+	HashVariableEntry *variable;
 } ChangedVarsNode;
 
 /* Element of stack with 'changedVars' list heads*/
 typedef struct ChangedVarsStackNode
 {
-	dlist_node		node;
-	dlist_head	   *changedVarsList;
-	MemoryContext	ctx;
+	dlist_node	node;
+	dlist_head  *changedVarsList;
+	MemoryContext ctx;
 } ChangedVarsStackNode;
 
 extern void init_attributes(HashVariableEntry* variable, TupleDesc tupdesc,
