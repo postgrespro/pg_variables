@@ -335,6 +335,15 @@ SELECT pgv_get('pack','var_int', NULL::int);
 ERROR:  unrecognized variable "var_int"
 COMMIT;
 ```
+Also you cannot undo removing variable by `ROLLBACK`:
+```sql
+SELECT pgv_set('pack', 'var_int', 122, true);
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+SELECT pgv_get('pack', 'var_int', NULL::int);
+ERROR:  unrecognized package "pack"
+```
 If you created transactional variable once, you should use flag `is_transactional`
 every time when you want to change variable value by functions `pgv_set()`,
 `pgv_insert()` and deprecated setters (i.e. `pgv_set_int()`). If you try to
