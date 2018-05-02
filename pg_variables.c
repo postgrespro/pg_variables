@@ -76,7 +76,7 @@ static HashVariableEntry *createVariableInternal(HashPackageEntry *package,
 												 text *name, Oid typid,
 												 bool is_transactional);
 static void createSavepoint(HashPackageEntry *package, HashVariableEntry *variable);
-static bool isVarChangedInTrans(HashVariableEntry *variable);
+static bool isVarChangedInCurrentTrans(HashVariableEntry *variable);
 static void addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable);
 
 #define CHECK_ARGS_FOR_NULL() \
@@ -100,12 +100,11 @@ static HashPackageEntry *LastPackage = NULL;
 static HashVariableEntry *LastVariable = NULL;
 
 /*
- * List of variables, changed in top level transaction. Used to limit
+ * Stack of lists of variables, changed in each transaction level. Used to limit
  * number of proceeded variables on start of transaction.
  */
-static dlist_head *changedVars = NULL;
-static MemoryContext changedVarsContext = NULL;
 static dlist_head *changedVarsStack = NULL;
+static MemoryContext changedVarsContext = NULL;
 #define get_actual_changed_vars_list() \
 	((dlist_head_element(ChangedVarsStackNode, node, changedVarsStack))-> \
 						 changedVarsList)
@@ -621,7 +620,7 @@ variable_insert(PG_FUNCTION_ARGS)
 					 errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
 							key, LastVariable->is_transactional ? "" : "NOT ")));
 		}
-		if (!isVarChangedInTrans(variable) && variable->is_transactional)
+		if (!isVarChangedInCurrentTrans(variable) && variable->is_transactional)
 		{
 			createSavepoint(package, variable);
 			addToChangedVars(package, variable);
@@ -707,7 +706,7 @@ variable_update(PG_FUNCTION_ARGS)
 	else
 		variable = LastVariable;
 
-	if (variable->is_transactional && !isVarChangedInTrans(variable))
+	if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
 	{
 		createSavepoint(package, variable);
 		addToChangedVars(package, variable);
@@ -785,7 +784,7 @@ variable_delete(PG_FUNCTION_ARGS)
 	else
 		variable = LastVariable;
 
-	if (variable->is_transactional && !isVarChangedInTrans(variable))
+	if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
 	{
 		createSavepoint(package, variable);
 		addToChangedVars(package, variable);
@@ -1220,7 +1219,7 @@ remove_packages(PG_FUNCTION_ARGS)
 
 	packagesHash = NULL;
 	ModuleContext = NULL;
-	changedVars = NULL;
+	changedVarsStack = NULL;
 
 	PG_RETURN_VOID();
 }
@@ -1663,7 +1662,7 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 		 * For each transaction level there should be own savepoint.
 		 * New value should be stored in a last state.
 		 */
-		if (variable->is_transactional && !isVarChangedInTrans(variable))
+		if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
 		{
 			createSavepoint(package, variable);
 		}
@@ -1769,6 +1768,7 @@ releaseSavepoint(HashVariableEntry *variable)
 		dlist_delete(nodeToDelete);
 		pfree(historyEntryToDelete);
 	}
+	(get_actual_value(variable)->level)--;
 }
 
 /*
@@ -1792,24 +1792,35 @@ rollbackSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
  * Check if variable was changed in current transaction level
  */
 static bool
-isVarChangedInTrans(HashVariableEntry *variable)
+isVarChangedInCurrentTrans(HashVariableEntry *variable)
 {
-	dlist_iter iter;
-	dlist_head *changedVars;
+	ValueHistoryEntry   *var_state;
 
 	if (!changedVarsStack)
 		return false;
 
-	changedVars = get_actual_changed_vars_list();
-	dlist_foreach(iter, changedVars)
-	{
-		ChangedVarsNode *cvn;
+	var_state = get_actual_value(variable);
+	return (var_state->level == GetCurrentTransactionNestLevel());
+}
 
-		cvn = dlist_container(ChangedVarsNode, node, iter.cur);
-		if (cvn->variable == variable)
-			return true;
+/*
+ * Check if variable was changed in parent transaction level
+ */
+static bool
+isVarChangedInUpperTrans(HashVariableEntry *variable)
+{
+	ValueHistoryEntry   *var_state,
+						*var_prev_state;
+
+	var_state = get_actual_value(variable);
+
+	if(dlist_has_next(&variable->data, &var_state->node))
+	{
+		var_prev_state = get_history_entry(var_state->node.next);
+		return (var_prev_state->level == (GetCurrentTransactionNestLevel() - 1));
 	}
-	return false;
+	else
+		return false;
 }
 
 /*
@@ -1925,7 +1936,7 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 
 	Assert(changedVarsStack && changedVarsContext);
 
-	if (!isVarChangedInTrans(variable))
+	if (!isVarChangedInCurrentTrans(variable))
 	{
 		ChangedVarsNode *cvn;
 
@@ -1934,6 +1945,7 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 		cvn->package = package;
 		cvn->variable = variable;
 		dlist_push_head(cvsn->changedVarsList, &cvn->node);
+		get_actual_value(cvn->variable)->level = GetCurrentTransactionNestLevel();
 	}
 }
 
@@ -1957,13 +1969,27 @@ levelUpOrRelease()
 		Assert(!dlist_is_empty(changedVarsStack));
 		dlist_foreach(iter, bottom_list->changedVarsList)
 		{
-			ChangedVarsNode *cvn;
+			ChangedVarsNode *cvn_old;
 
-			cvn = dlist_container(ChangedVarsNode, node, iter.cur);
-			if (isVarChangedInTrans(cvn->variable))
-				releaseSavepoint(cvn->variable);
+			cvn_old = dlist_container(ChangedVarsNode, node, iter.cur);
+			if (isVarChangedInUpperTrans(cvn_old->variable))
+				releaseSavepoint(cvn_old->variable);
 			else
-				addToChangedVars(cvn->package, cvn->variable);
+			{
+				ChangedVarsNode *cvn_new;
+				ChangedVarsStackNode *cvsn;
+
+				/* 
+				 * Impossible to push in upper list existing node because
+				 * it was created in another context
+				 */
+				cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
+				cvn_new = MemoryContextAllocZero(cvsn->ctx, sizeof(ChangedVarsNode));
+				cvn_new->package = cvn_old->package;
+				cvn_new->variable = cvn_old->variable;
+				dlist_push_head(cvsn->changedVarsList, &cvn_new->node);
+				(get_actual_value(cvn_new->variable)->level)--;
+			}
 		}
 		MemoryContextDelete(bottom_list->ctx);
 	}

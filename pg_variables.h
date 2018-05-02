@@ -68,6 +68,8 @@ typedef struct ValueHistoryEntry{
 		ScalarVar scalar;
 		RecordVar record;
 	}		value;
+	/* Transaction nest level of current entry */
+	int level;
 } ValueHistoryEntry;
 
 typedef dlist_head ValueHistory;
@@ -139,6 +141,8 @@ extern void insert_savepoint(HashVariableEntry *variable,
 	(&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.scalar))
 #define get_actual_value_record(variable) \
 	(&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.record))
+#define get_actual_value(variable) \
+	(dlist_head_element(ValueHistoryEntry, node, &variable->data))
 #define get_history_entry(node_ptr) \
 	dlist_container(ValueHistoryEntry, node, node_ptr)
 
