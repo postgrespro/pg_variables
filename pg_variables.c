@@ -77,6 +77,7 @@ static HashVariableEntry *createVariableInternal(HashPackageEntry *package,
 												 bool is_transactional);
 static void createSavepoint(HashPackageEntry *package, HashVariableEntry *variable);
 static bool isVarChangedInCurrentTrans(HashVariableEntry *variable);
+static bool isVarChangedInUpperTrans(HashVariableEntry *variable);
 static void addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable);
 
 #define CHECK_ARGS_FOR_NULL() \
@@ -1768,6 +1769,10 @@ releaseSavepoint(HashVariableEntry *variable)
 		dlist_delete(nodeToDelete);
 		pfree(historyEntryToDelete);
 	}
+	/*
+	 * If variable was changed in subtransaction, so it is considered it
+	 * was changed in parent transaction.
+	 */
 	(get_actual_value(variable)->level)--;
 }
 
@@ -1819,8 +1824,7 @@ isVarChangedInUpperTrans(HashVariableEntry *variable)
 		var_prev_state = get_history_entry(var_state->node.next);
 		return (var_prev_state->level == (GetCurrentTransactionNestLevel() - 1));
 	}
-	else
-		return false;
+	return false;
 }
 
 /*
@@ -1901,12 +1905,12 @@ popChangedVarsStack()
 {
 	if (changedVarsStack)
 	{
-		ChangedVarsStackNode *cvse;
+		ChangedVarsStackNode *cvsn;
 
 		Assert(!dlist_is_empty(changedVarsStack));
-		cvse = dlist_container(ChangedVarsStackNode, node,
+		cvsn = dlist_container(ChangedVarsStackNode, node,
 							   dlist_pop_head_node(changedVarsStack));
-		MemoryContextDelete(cvse->ctx);
+		MemoryContextDelete(cvsn->ctx);
 		if (dlist_is_empty(changedVarsStack))
 		{
 			MemoryContextDelete(changedVarsContext);
@@ -1914,6 +1918,20 @@ popChangedVarsStack()
 			changedVarsContext = NULL;
 		}
 	}
+}
+
+/*
+ * Initialize an instance of ChangedVarsNode datatype
+ */
+static inline ChangedVarsNode *
+initChangedVarsNode(MemoryContext ctx, HashPackageEntry *package, HashVariableEntry *variable)
+{
+	ChangedVarsNode *cvn;
+
+	cvn = MemoryContextAllocZero(ctx, sizeof(ChangedVarsNode));
+	cvn->package = package;
+	cvn->variable = variable;
+	return cvn;
 }
 
 /*
@@ -1941,16 +1959,14 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 		ChangedVarsNode *cvn;
 
 		cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
-		cvn = MemoryContextAllocZero(cvsn->ctx, sizeof(ChangedVarsNode));
-		cvn->package = package;
-		cvn->variable = variable;
+		cvn = initChangedVarsNode(cvsn->ctx, package, variable);
 		dlist_push_head(cvsn->changedVarsList, &cvn->node);
 		get_actual_value(cvn->variable)->level = GetCurrentTransactionNestLevel();
 	}
 }
 
 /*
- * If variable was chenged in some subtransaction, it is considered that it was
+ * If variable was changed in some subtransaction, it is considered that it was
  * changed in parent transaction. So it is important to add this variable to
  * list of changes of parent transaction. But if var was already changed in
  * upper level, it has savepoint there, so we need to release it.
@@ -1984,9 +2000,7 @@ levelUpOrRelease()
 				 * it was created in another context
 				 */
 				cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
-				cvn_new = MemoryContextAllocZero(cvsn->ctx, sizeof(ChangedVarsNode));
-				cvn_new->package = cvn_old->package;
-				cvn_new->variable = cvn_old->variable;
+				cvn_new = initChangedVarsNode(cvsn->ctx, cvn_old->package, cvn_old->variable);
 				dlist_push_head(cvsn->changedVarsList, &cvn_new->node);
 				(get_actual_value(cvn_new->variable)->level)--;
 			}
