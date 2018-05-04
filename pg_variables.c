@@ -26,26 +26,6 @@
 
 PG_MODULE_MAGIC;
 
-/* Scalar variables functions */
-PG_FUNCTION_INFO_V1(variable_set_any);
-PG_FUNCTION_INFO_V1(variable_get_any);
-
-/* Deprecated scalar variables functions */
-PG_FUNCTION_INFO_V1(variable_set_int);
-PG_FUNCTION_INFO_V1(variable_get_int);
-PG_FUNCTION_INFO_V1(variable_set_text);
-PG_FUNCTION_INFO_V1(variable_get_text);
-PG_FUNCTION_INFO_V1(variable_set_numeric);
-PG_FUNCTION_INFO_V1(variable_get_numeric);
-PG_FUNCTION_INFO_V1(variable_set_timestamp);
-PG_FUNCTION_INFO_V1(variable_get_timestamp);
-PG_FUNCTION_INFO_V1(variable_set_timestamptz);
-PG_FUNCTION_INFO_V1(variable_get_timestamptz);
-PG_FUNCTION_INFO_V1(variable_set_date);
-PG_FUNCTION_INFO_V1(variable_get_date);
-PG_FUNCTION_INFO_V1(variable_set_jsonb);
-PG_FUNCTION_INFO_V1(variable_get_jsonb);
-
 /* Functions to work with records */
 PG_FUNCTION_INFO_V1(variable_insert);
 PG_FUNCTION_INFO_V1(variable_update);
@@ -66,19 +46,27 @@ PG_FUNCTION_INFO_V1(get_packages_stats);
 
 extern void _PG_init(void);
 extern void _PG_fini(void);
+static void ensurePackagesHashExists(void);
 static void getKeyFromName(text *name, char *key);
-static void ensurePackagesHashExists();
-static HashPackageEntry *getPackageByName(text *name, bool create, bool strict);
 
+static HashPackageEntry *getPackageByName(text *name, bool create, bool strict);
 static HashVariableEntry *getVariableInternal(HTAB *variables, text *name,
 											  Oid typid, bool strict);
 static HashVariableEntry *createVariableInternal(HashPackageEntry *package,
 												 text *name, Oid typid,
 												 bool is_transactional);
+
+static void releaseSavepoint(HashVariableEntry *variable);
+static void rollbackSavepoint(HashPackageEntry *package, HashVariableEntry *variable);
 static void createSavepoint(HashPackageEntry *package, HashVariableEntry *variable);
+
+static void mergeChangedVarsStack(void);
+static void pushChangedVarsStack(void);
+static void popChangedVarsStack(void);
+static void addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable);
+
 static bool isVarChangedInCurrentTrans(HashVariableEntry *variable);
 static bool isVarChangedInUpperTrans(HashVariableEntry *variable);
-static void addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -100,15 +88,35 @@ static HashPackageEntry *LastPackage = NULL;
 /* Recent variable */
 static HashVariableEntry *LastVariable = NULL;
 
-/*
- * Stack of lists of variables, changed in each transaction level. Used to limit
- * number of proceeded variables on start of transaction.
- */
+
+/* This stack contains lists of changed variables per each subxact level */
 static dlist_head *changedVarsStack = NULL;
 static MemoryContext changedVarsContext = NULL;
+
+/* Returns a list of of vars changed at current subxact level */
 #define get_actual_changed_vars_list() \
-	((dlist_head_element(ChangedVarsStackNode, node, changedVarsStack))-> \
-						 changedVarsList)
+	( \
+		AssertMacro(changedVarsStack != NULL), \
+		(dlist_head_element(ChangedVarsStackNode, \
+							node, changedVarsStack))->changedVarsList \
+	)
+
+
+#define PGV_MCXT_MAIN		"pg_variables: main memory context"
+#define PGV_MCXT_VARS		"pg_variables: variables hash"
+#define PGV_MCXT_STACK		"pg_variables: changedVarsStack"
+#define PGV_MCXT_STACK_NODE	"pg_variables: changedVarsStackNode"
+
+
+#ifndef ALLOCSET_DEFAULT_SIZES
+#define ALLOCSET_DEFAULT_SIZES \
+	ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
+#endif
+
+#ifndef ALLOCSET_START_SMALL_SIZES
+#define ALLOCSET_START_SMALL_SIZES \
+	ALLOCSET_SMALL_MINSIZE, ALLOCSET_SMALL_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
+#endif
 
 
 /*
@@ -128,6 +136,7 @@ variable_set(text *package_name, text *var_name,
 									  is_transactional);
 
 	scalar = get_actual_value_scalar(variable);
+
 	/* Release memory for variable */
 	if (scalar->typbyval == false && scalar->is_null == false)
 		pfree(DatumGetPointer(scalar->value));
@@ -171,390 +180,86 @@ variable_get(text *package_name, text *var_name,
 	return scalar->value;
 }
 
-Datum
-variable_set_any(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
 
-	CHECK_ARGS_FOR_NULL();
+#define VARIABLE_GET_TEMPLATE(pkg_arg, var_arg, strict_arg, type, typid) \
+	PG_FUNCTION_INFO_V1(variable_get_##type); \
+	Datum \
+	variable_get_##type(PG_FUNCTION_ARGS) \
+	{ \
+		text	   *package_name; \
+		text	   *var_name; \
+		bool		strict; \
+		bool		isnull; \
+		Datum		value; \
+		\
+		CHECK_ARGS_FOR_NULL(); \
+		\
+		package_name = PG_GETARG_TEXT_PP(pkg_arg); \
+		var_name = PG_GETARG_TEXT_PP(var_arg); \
+		strict = PG_GETARG_BOOL(strict_arg); \
+		\
+		value = variable_get(package_name, var_name, \
+							 (typid), &isnull, strict); \
+		\
+		PG_FREE_IF_COPY(package_name, pkg_arg); \
+		PG_FREE_IF_COPY(var_name, var_arg); \
+		\
+		if (!isnull) \
+			PG_RETURN_DATUM(value); \
+		else \
+			PG_RETURN_NULL(); \
+	}
+
+/* deprecated functions */
+VARIABLE_GET_TEMPLATE(0, 1, 2, int, INT4OID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, text, TEXTOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, numeric, NUMERICOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, timestamp, TIMESTAMPOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, timestamptz, TIMESTAMPTZOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, date, DATEOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, jsonb, JSONBOID)
+
+/* current API */
+VARIABLE_GET_TEMPLATE(0, 1, 3, any, get_fn_expr_argtype(fcinfo->flinfo, 2))
+
+
+#define VARIABLE_SET_TEMPLATE(type, typid) \
+	PG_FUNCTION_INFO_V1(variable_set_##type); \
+	Datum \
+	variable_set_##type(PG_FUNCTION_ARGS) \
+	{ \
+		text	   *package_name; \
+		text	   *var_name; \
+		bool		is_transactional; \
+		\
+		CHECK_ARGS_FOR_NULL(); \
+		\
+		package_name = PG_GETARG_TEXT_PP(0); \
+		var_name = PG_GETARG_TEXT_PP(1); \
+		is_transactional = PG_GETARG_BOOL(3); \
+		\
+		variable_set(package_name, var_name, (typid), \
+					 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2), \
+					 PG_ARGISNULL(2), is_transactional); \
+		\
+		PG_FREE_IF_COPY(package_name, 0); \
+		PG_FREE_IF_COPY(var_name, 1); \
+		PG_RETURN_VOID(); \
+	}
+
+
+/* deprecated functions */
+VARIABLE_SET_TEMPLATE(int, INT4OID)
+VARIABLE_SET_TEMPLATE(text, TEXTOID)
+VARIABLE_SET_TEMPLATE(numeric, NUMERICOID)
+VARIABLE_SET_TEMPLATE(timestamp, TIMESTAMPOID)
+VARIABLE_SET_TEMPLATE(timestamptz, TIMESTAMPTZOID)
+VARIABLE_SET_TEMPLATE(date, DATEOID)
+VARIABLE_SET_TEMPLATE(jsonb, JSONBOID)
+
+/* current API */
+VARIABLE_SET_TEMPLATE(any, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, get_fn_expr_argtype(fcinfo->flinfo, 2),
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_any(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(3);
-
-	value = variable_get(package_name, var_name,
-						 get_fn_expr_argtype(fcinfo->flinfo, 2),
-						 &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_int(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, INT4OID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_int(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 INT4OID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_text(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, TEXTOID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_text(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 TEXTOID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_numeric(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, NUMERICOID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_numeric(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 NUMERICOID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_timestamp(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, TIMESTAMPOID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_timestamp(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 TIMESTAMPOID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_timestamptz(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, TIMESTAMPTZOID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_timestamptz(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 TIMESTAMPTZOID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_date(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, DATEOID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_date(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 DATEOID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
-
-Datum
-variable_set_jsonb(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, JSONBOID,
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_jsonb(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(2);
-
-	value = variable_get(package_name, var_name,
-						 JSONBOID, &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
 
 Datum
 variable_insert(PG_FUNCTION_ARGS)
@@ -1473,31 +1178,24 @@ getKeyFromName(text *name, char *key)
 }
 
 static void
-ensurePackagesHashExists()
+ensurePackagesHashExists(void)
 {
-	HASHCTL		ctl;
+	HASHCTL ctl;
 
 	if (packagesHash)
 		return;
 
-#if PG_VERSION_NUM >= 110000
 	ModuleContext = AllocSetContextCreate(CacheMemoryContext,
-										  "pg_variables memory context",
+										  PGV_MCXT_MAIN,
 										  ALLOCSET_DEFAULT_SIZES);
-#else
-	ModuleContext = AllocSetContextCreate(CacheMemoryContext,
-										  "pg_variables memory context",
-										  ALLOCSET_DEFAULT_MINSIZE,
-										  ALLOCSET_DEFAULT_INITSIZE,
-										  ALLOCSET_DEFAULT_MAXSIZE);
-#endif
 
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(HashPackageEntry);
 	ctl.hcxt = ModuleContext;
 
 	packagesHash = hash_create("Packages hash",
-							   NUMPACKAGES, &ctl, HASH_ELEM | HASH_CONTEXT);
+							   NUMPACKAGES, &ctl,
+							   HASH_ELEM | HASH_CONTEXT);
 }
 
 static HashPackageEntry *
@@ -1519,44 +1217,29 @@ getPackageByName(text* name, bool create, bool strict)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("unrecognized package \"%s\"", key)));
-			else
-				return NULL;
+
+			return NULL;
 		}
 	}
 
-	if (create)
-		package = (HashPackageEntry *) hash_search(packagesHash,
-												   key, HASH_ENTER, &found);
-	else
-		package = (HashPackageEntry *) hash_search(packagesHash,
-												   key, HASH_FIND, &found);
+	/* Find or create a package entry */
+	package = (HashPackageEntry *) hash_search(packagesHash, key,
+											   (create ? HASH_ENTER : HASH_FIND),
+											   &found);
 
 	/* Package entry was created, so we need create hash table for variables. */
 	if (!found)
 	{
 		if (create)
 		{
-			HASHCTL		ctl;
-			char		hash_name[BUFSIZ];
-			MemoryContext oldcxt;
+			HASHCTL ctl;
+			char	hash_name[BUFSIZ];
+
+			package->hctx = AllocSetContextCreate(ModuleContext,
+												  PGV_MCXT_VARS,
+												  ALLOCSET_DEFAULT_SIZES);
 
 			sprintf(hash_name, "Variables hash for package \"%s\"", key);
-
-#if PG_VERSION_NUM >= 110000
-			package->hctx = AllocSetContextCreateExtended(ModuleContext,
-														  hash_name,
-														  ALLOCSET_DEFAULT_MINSIZE,
-														  ALLOCSET_DEFAULT_INITSIZE,
-														  ALLOCSET_DEFAULT_MAXSIZE);
-#else
-			package->hctx = AllocSetContextCreate(ModuleContext,
-												  hash_name,
-												  ALLOCSET_DEFAULT_MINSIZE,
-												  ALLOCSET_DEFAULT_INITSIZE,
-												  ALLOCSET_DEFAULT_MAXSIZE);
-#endif
-
-			oldcxt = MemoryContextSwitchTo(package->hctx);
 
 			ctl.keysize = NAMEDATALEN;
 			ctl.entrysize = sizeof(HashVariableEntry);
@@ -1564,8 +1247,6 @@ getPackageByName(text* name, bool create, bool strict)
 			package->variablesHash = hash_create(hash_name,
 												 NUMVARIABLES, &ctl,
 												 HASH_ELEM | HASH_CONTEXT);
-
-			MemoryContextSwitchTo(oldcxt);
 		}
 		else if (strict)
 			ereport(ERROR,
@@ -1649,7 +1330,8 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 					 errmsg("variable \"%s\" requires \"%s\" value",
 							key, var_type)));
 		}
-		if (variable->is_transactional!=is_transactional)
+
+		if (variable->is_transactional != is_transactional)
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1660,7 +1342,7 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 		/*
 		 * Savepoint must be created when variable changed in current
 		 * transaction.
-		 * For each transaction level there should be own savepoint.
+		 * For each transaction level there should be a corresponding savepoint.
 		 * New value should be stored in a last state.
 		 */
 		if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
@@ -1721,6 +1403,7 @@ createSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
 
 		oldcxt = MemoryContextSwitchTo(package->hctx);
 		history = &variable->data;
+
 		/* Release memory for variable */
 		history_entry_new = palloc0(sizeof(ValueHistoryEntry));
 		history_entry_prev = dlist_head_element(ValueHistoryEntry, node, history);
@@ -1764,16 +1447,16 @@ releaseSavepoint(HashVariableEntry *variable)
 		}
 		else if (historyEntryToDelete->value.scalar.typbyval == false &&
 				 historyEntryToDelete->value.scalar.is_null == false)
+		{
 			pfree(DatumGetPointer(historyEntryToDelete->value.scalar.value));
+		}
 
 		dlist_delete(nodeToDelete);
 		pfree(historyEntryToDelete);
 	}
-	/*
-	 * If variable was changed in subtransaction, so it is considered it
-	 * was changed in parent transaction.
-	 */
-	(get_actual_value(variable)->level)--;
+
+	/* Change subxact level due to release */
+	get_actual_value(variable)->level--;
 }
 
 /*
@@ -1794,6 +1477,20 @@ rollbackSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
 }
 
 /*
+ * Initialize an instance of ChangedVarsNode datatype
+ */
+static inline ChangedVarsNode *
+makeChangedVarsNode(MemoryContext ctx, HashPackageEntry *package, HashVariableEntry *variable)
+{
+	ChangedVarsNode *cvn;
+
+	cvn = MemoryContextAllocZero(ctx, sizeof(ChangedVarsNode));
+	cvn->package = package;
+	cvn->variable = variable;
+	return cvn;
+}
+
+/*
  * Check if variable was changed in current transaction level
  */
 static bool
@@ -1805,7 +1502,7 @@ isVarChangedInCurrentTrans(HashVariableEntry *variable)
 		return false;
 
 	var_state = get_actual_value(variable);
-	return (var_state->level == GetCurrentTransactionNestLevel());
+	return var_state->level == GetCurrentTransactionNestLevel();
 }
 
 /*
@@ -1819,48 +1516,32 @@ isVarChangedInUpperTrans(HashVariableEntry *variable)
 
 	var_state = get_actual_value(variable);
 
-	if(dlist_has_next(&variable->data, &var_state->node))
+	if (dlist_has_next(&variable->data, &var_state->node))
 	{
 		var_prev_state = get_history_entry(var_state->node.next);
-		return (var_prev_state->level == (GetCurrentTransactionNestLevel() - 1));
+		return var_prev_state->level == GetCurrentTransactionNestLevel() - 1;
 	}
+
 	return false;
 }
 
 /*
- * Create new list of variables, changed in current transaction level
+ * Create a new list of variables, changed in current transaction level
  */
 static void
-pushChangedVarsStack()
+pushChangedVarsStack(void)
 {
 	MemoryContext oldcxt;
 	ChangedVarsStackNode *cvsn;
-	char		child_context_name[BUFSIZ];
 
 	/*
 	 * Initialize changedVarsStack and create MemoryContext for it
 	 * if not done before.
 	 */
 	if (!changedVarsContext)
-	{
-		char		top_context_name[BUFSIZ];
-
-		sprintf(top_context_name, "Memory context for changedVarsStack");
-
-#if PG_VERSION_NUM >= 110000
-		changedVarsContext = AllocSetContextCreateExtended(ModuleContext,
-														   top_context_name,
-														   ALLOCSET_DEFAULT_MINSIZE,
-														   ALLOCSET_DEFAULT_INITSIZE,
-														   ALLOCSET_DEFAULT_MAXSIZE);
-#else
 		changedVarsContext = AllocSetContextCreate(ModuleContext,
-												   top_context_name,
-												   ALLOCSET_DEFAULT_MINSIZE,
-												   ALLOCSET_DEFAULT_INITSIZE,
-												   ALLOCSET_DEFAULT_MAXSIZE);
-#endif
-	}
+												   PGV_MCXT_STACK,
+												   ALLOCSET_START_SMALL_SIZES);
 
 	oldcxt = MemoryContextSwitchTo(changedVarsContext);
 
@@ -1873,23 +1554,9 @@ pushChangedVarsStack()
 	cvsn = palloc0(sizeof(ChangedVarsStackNode));
 	cvsn->changedVarsList = palloc0(sizeof(dlist_head));
 
-	sprintf(child_context_name,
-			"Memory context for changedVars list in %d xact level",
-			GetCurrentTransactionNestLevel());
-
-#if PG_VERSION_NUM >= 110000
-	cvsn->ctx = AllocSetContextCreateExtended(changedVarsContext,
-											  child_context_name,
-											  ALLOCSET_DEFAULT_MINSIZE,
-											  ALLOCSET_DEFAULT_INITSIZE,
-											  ALLOCSET_DEFAULT_MAXSIZE);
-#else
 	cvsn->ctx = AllocSetContextCreate(changedVarsContext,
-									  child_context_name,
-									  ALLOCSET_DEFAULT_MINSIZE,
-									  ALLOCSET_DEFAULT_INITSIZE,
-									  ALLOCSET_DEFAULT_MAXSIZE);
-#endif
+									  PGV_MCXT_STACK_NODE,
+									  ALLOCSET_START_SMALL_SIZES);
 
 	dlist_init(cvsn->changedVarsList);
 	dlist_push_head(changedVarsStack, &cvsn->node);
@@ -1898,10 +1565,10 @@ pushChangedVarsStack()
 }
 
 /*
- * Remove list of variables, changed in current transaction level
+ * Remove current list of variables, changed in current transaction level
  */
 static void
-popChangedVarsStack()
+popChangedVarsStack(void)
 {
 	if (changedVarsStack)
 	{
@@ -1921,17 +1588,52 @@ popChangedVarsStack()
 }
 
 /*
- * Initialize an instance of ChangedVarsNode datatype
+ * Pop current list of variables and add missing changed vars to upper list
  */
-static inline ChangedVarsNode *
-initChangedVarsNode(MemoryContext ctx, HashPackageEntry *package, HashVariableEntry *variable)
+static void
+mergeChangedVarsStack(void)
 {
-	ChangedVarsNode *cvn;
+	if (changedVarsStack)
+	{
+		dlist_iter	iter;
+		ChangedVarsStackNode *bottom_list;
 
-	cvn = MemoryContextAllocZero(ctx, sizeof(ChangedVarsNode));
-	cvn->package = package;
-	cvn->variable = variable;
-	return cvn;
+		/* List removed from stack but we still can use it */
+		bottom_list = dlist_container(ChangedVarsStackNode, node,
+									  dlist_pop_head_node(changedVarsStack));
+
+		/* There must be at least one parent level */
+		Assert(!dlist_is_empty(changedVarsStack));
+
+		dlist_foreach(iter, bottom_list->changedVarsList)
+		{
+			ChangedVarsNode *cvn_old = dlist_container(ChangedVarsNode, node, iter.cur);
+
+			/* Did this variable change at parent level? */
+			if (isVarChangedInUpperTrans(cvn_old->variable))
+			{
+				/* We just have to drop this state */
+				releaseSavepoint(cvn_old->variable);
+			}
+			else
+			{
+				ChangedVarsNode *cvn_new;
+				ChangedVarsStackNode *cvsn;
+
+				/*
+				 * Impossible to push in upper list existing node because
+				 * it was created in another context
+				 */
+				cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
+				cvn_new = makeChangedVarsNode(cvsn->ctx, cvn_old->package, cvn_old->variable);
+				dlist_push_head(cvsn->changedVarsList, &cvn_new->node);
+
+				/* Change subxact level due to release */
+				get_actual_value(cvn_new->variable)->level--;
+			}
+		}
+		MemoryContextDelete(bottom_list->ctx);
+	}
 }
 
 /*
@@ -1944,7 +1646,7 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 
 	if (!changedVarsStack)
 	{
-		int			level = GetCurrentTransactionNestLevel();
+		int level = GetCurrentTransactionNestLevel();
 
 		while (level-- > 0)
 		{
@@ -1959,53 +1661,11 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 		ChangedVarsNode *cvn;
 
 		cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
-		cvn = initChangedVarsNode(cvsn->ctx, package, variable);
+		cvn = makeChangedVarsNode(cvsn->ctx, package, variable);
 		dlist_push_head(cvsn->changedVarsList, &cvn->node);
+
+		/* Give this variable current subxact level */
 		get_actual_value(cvn->variable)->level = GetCurrentTransactionNestLevel();
-	}
-}
-
-/*
- * If variable was changed in some subtransaction, it is considered that it was
- * changed in parent transaction. So it is important to add this variable to
- * list of changes of parent transaction. But if var was already changed in
- * upper level, it has savepoint there, so we need to release it.
- */
-static void
-levelUpOrRelease()
-{
-	if (changedVarsStack)
-	{
-		dlist_iter	iter;
-		ChangedVarsStackNode *bottom_list;
-
-		/* List removed from stack but we still can use it */
-		bottom_list = dlist_container(ChangedVarsStackNode, node,
-									  dlist_pop_head_node(changedVarsStack));
-		Assert(!dlist_is_empty(changedVarsStack));
-		dlist_foreach(iter, bottom_list->changedVarsList)
-		{
-			ChangedVarsNode *cvn_old;
-
-			cvn_old = dlist_container(ChangedVarsNode, node, iter.cur);
-			if (isVarChangedInUpperTrans(cvn_old->variable))
-				releaseSavepoint(cvn_old->variable);
-			else
-			{
-				ChangedVarsNode *cvn_new;
-				ChangedVarsStackNode *cvsn;
-
-				/* 
-				 * Impossible to push in upper list existing node because
-				 * it was created in another context
-				 */
-				cvsn = dlist_head_element(ChangedVarsStackNode, node, changedVarsStack);
-				cvn_new = initChangedVarsNode(cvsn->ctx, cvn_old->package, cvn_old->variable);
-				dlist_push_head(cvsn->changedVarsList, &cvn_new->node);
-				(get_actual_value(cvn_new->variable)->level)--;
-			}
-		}
-		MemoryContextDelete(bottom_list->ctx);
 	}
 }
 
@@ -2026,11 +1686,9 @@ typedef enum Action
 static void
 applyActionOnChangedVars(Action action)
 {
+	dlist_head *changedVars = get_actual_changed_vars_list();
 	dlist_mutable_iter miter;
-	dlist_head *changedVars;
 
-	Assert(changedVarsStack);
-	changedVars = get_actual_changed_vars_list();
 	dlist_foreach_modify(miter, changedVars)
 	{
 		ChangedVarsNode *cvn = dlist_container(ChangedVarsNode, node, miter.cur);
@@ -2062,7 +1720,7 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				pushChangedVarsStack();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
-				levelUpOrRelease();
+				mergeChangedVarsStack();
 				break;
 			case SUBXACT_EVENT_ABORT_SUB:
 				applyActionOnChangedVars(ROLLBACK_TO_SAVEPOINT);
