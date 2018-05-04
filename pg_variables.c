@@ -26,10 +26,6 @@
 
 PG_MODULE_MAGIC;
 
-/* Scalar variables functions */
-PG_FUNCTION_INFO_V1(variable_set_any);
-PG_FUNCTION_INFO_V1(variable_get_any);
-
 /* Functions to work with records */
 PG_FUNCTION_INFO_V1(variable_insert);
 PG_FUNCTION_INFO_V1(variable_update);
@@ -185,7 +181,7 @@ variable_get(text *package_name, text *var_name,
 }
 
 
-#define VARIABLE_GET_TEMPLATE(type, typid) \
+#define VARIABLE_GET_TEMPLATE(pkg_arg, var_arg, strict_arg, type, typid) \
 	PG_FUNCTION_INFO_V1(variable_get_##type); \
 	Datum \
 	variable_get_##type(PG_FUNCTION_ARGS) \
@@ -198,15 +194,15 @@ variable_get(text *package_name, text *var_name,
 		\
 		CHECK_ARGS_FOR_NULL(); \
 		\
-		package_name = PG_GETARG_TEXT_PP(0); \
-		var_name = PG_GETARG_TEXT_PP(1); \
-		strict = PG_GETARG_BOOL(2); \
+		package_name = PG_GETARG_TEXT_PP(pkg_arg); \
+		var_name = PG_GETARG_TEXT_PP(var_arg); \
+		strict = PG_GETARG_BOOL(strict_arg); \
 		\
 		value = variable_get(package_name, var_name, \
 							 (typid), &isnull, strict); \
 		\
-		PG_FREE_IF_COPY(package_name, 0); \
-		PG_FREE_IF_COPY(var_name, 1); \
+		PG_FREE_IF_COPY(package_name, pkg_arg); \
+		PG_FREE_IF_COPY(var_name, var_arg); \
 		\
 		if (!isnull) \
 			PG_RETURN_DATUM(value); \
@@ -214,14 +210,17 @@ variable_get(text *package_name, text *var_name,
 			PG_RETURN_NULL(); \
 	}
 
+/* deprecated functions */
+VARIABLE_GET_TEMPLATE(0, 1, 2, int, INT4OID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, text, TEXTOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, numeric, NUMERICOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, timestamp, TIMESTAMPOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, timestamptz, TIMESTAMPTZOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, date, DATEOID)
+VARIABLE_GET_TEMPLATE(0, 1, 2, jsonb, JSONBOID)
 
-VARIABLE_GET_TEMPLATE(int, INT4OID)
-VARIABLE_GET_TEMPLATE(text, TEXTOID)
-VARIABLE_GET_TEMPLATE(numeric, NUMERICOID)
-VARIABLE_GET_TEMPLATE(timestamp, TIMESTAMPOID)
-VARIABLE_GET_TEMPLATE(timestamptz, TIMESTAMPTZOID)
-VARIABLE_GET_TEMPLATE(date, DATEOID)
-VARIABLE_GET_TEMPLATE(jsonb, JSONBOID)
+/* current API */
+VARIABLE_GET_TEMPLATE(0, 1, 3, any, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
 
 #define VARIABLE_SET_TEMPLATE(type, typid) \
@@ -249,6 +248,7 @@ VARIABLE_GET_TEMPLATE(jsonb, JSONBOID)
 	}
 
 
+/* deprecated functions */
 VARIABLE_SET_TEMPLATE(int, INT4OID)
 VARIABLE_SET_TEMPLATE(text, TEXTOID)
 VARIABLE_SET_TEMPLATE(numeric, NUMERICOID)
@@ -257,55 +257,8 @@ VARIABLE_SET_TEMPLATE(timestamptz, TIMESTAMPTZOID)
 VARIABLE_SET_TEMPLATE(date, DATEOID)
 VARIABLE_SET_TEMPLATE(jsonb, JSONBOID)
 
-
-Datum
-variable_set_any(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		is_transactional;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	is_transactional = PG_GETARG_BOOL(3);
-
-	variable_set(package_name, var_name, get_fn_expr_argtype(fcinfo->flinfo, 2),
-				 PG_ARGISNULL(2) ? 0 : PG_GETARG_DATUM(2),
-				 PG_ARGISNULL(2), is_transactional);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	PG_RETURN_VOID();
-}
-
-Datum
-variable_get_any(PG_FUNCTION_ARGS)
-{
-	text	   *package_name;
-	text	   *var_name;
-	bool		strict;
-	bool		is_null;
-	Datum		value;
-
-	CHECK_ARGS_FOR_NULL();
-
-	package_name = PG_GETARG_TEXT_PP(0);
-	var_name = PG_GETARG_TEXT_PP(1);
-	strict = PG_GETARG_BOOL(3);
-
-	value = variable_get(package_name, var_name,
-						 get_fn_expr_argtype(fcinfo->flinfo, 2),
-						 &is_null, strict);
-
-	PG_FREE_IF_COPY(package_name, 0);
-	PG_FREE_IF_COPY(var_name, 1);
-	if (!is_null)
-		PG_RETURN_DATUM(value);
-	else
-		PG_RETURN_NULL();
-}
+/* current API */
+VARIABLE_SET_TEMPLATE(any, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
 
 Datum
