@@ -70,6 +70,7 @@ typedef struct ValueHistoryEntry{
 	}		value;
 	/* Transaction nest level of current entry */
 	int level;
+	bool is_valid;
 } ValueHistoryEntry;
 
 typedef dlist_head ValueHistory;

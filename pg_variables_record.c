@@ -367,6 +367,7 @@ insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
 	record_prev = get_actual_value_record(variable);
 	oldcxt = MemoryContextSwitchTo(packageContext);
 	history_entry_new = palloc0(sizeof(ValueHistoryEntry));
+	history_entry_new->is_valid = true;
 	record_new = &(history_entry_new->value.record);
 	dlist_push_head(&variable->data, &history_entry_new->node);
 	init_attributes(variable, record_prev->tupdesc, packageContext);

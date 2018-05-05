@@ -621,7 +621,7 @@ variable_insert(PG_FUNCTION_ARGS)
 					 errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
 							key, LastVariable->is_transactional ? "" : "NOT ")));
 		}
-		if (!isVarChangedInCurrentTrans(variable) && variable->is_transactional)
+		if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
 		{
 			createSavepoint(package, variable);
 			addToChangedVars(package, variable);
@@ -1030,7 +1030,6 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 static void
 cleanVariableCurrentState(HashVariableEntry *variable)
 {
-	ValueHistory *history;
 	ValueHistoryEntry *historyEntryToDelete;
 
 	if (variable->typid == RECORDOID)
@@ -1043,8 +1042,7 @@ cleanVariableCurrentState(HashVariableEntry *variable)
 			pfree(DatumGetPointer(scalar->value));
 	}
 
-	history = &variable->data;
-	historyEntryToDelete = get_history_entry(dlist_pop_head_node(history));
+	historyEntryToDelete = get_history_entry(dlist_pop_head_node(&variable->data));
 	pfree(historyEntryToDelete);
 }
 
@@ -1069,7 +1067,8 @@ variable_exists(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
-	HashPackageEntry *package;
+	HashPackageEntry  *package;
+	HashVariableEntry *variable;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -1089,12 +1088,13 @@ variable_exists(PG_FUNCTION_ARGS)
 
 	getKeyFromName(var_name, key);
 
-	hash_search(package->variablesHash, key, HASH_FIND, &found);
+	variable = (HashVariableEntry *) hash_search(package->variablesHash,
+												 key, HASH_FIND, &found);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
 
-	PG_RETURN_BOOL(found);
+	PG_RETURN_BOOL(found?get_actual_value(variable)->is_valid:found);
 }
 
 /*
@@ -1141,16 +1141,29 @@ remove_variable(PG_FUNCTION_ARGS)
 	getKeyFromName(var_name, key);
 
 	variable = (HashVariableEntry *) hash_search(package->variablesHash,
-												 key, HASH_REMOVE, &found);
+												 key, HASH_FIND, &found);
 	if (!found)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("unrecognized variable \"%s\"", key)));
-
-	/* Remove variable from cache */
-	LastVariable = NULL;
-
-	cleanVariableAllStates(variable);
+				errmsg("unrecognized variable \"%s\"", key)));
+	else
+	{
+		if (variable->is_transactional)
+		{
+			createSavepoint(package, variable);
+			addToChangedVars(package, variable);
+			get_actual_value(variable)->is_valid = false;
+		}
+		else
+		{
+			/* Remove variable from package */
+			hash_search(package->variablesHash, key, HASH_REMOVE, &found);
+			/* Free allocated memory */
+			cleanVariableAllStates(variable);
+		}
+		/* Remove variable from cache */
+		LastVariable = NULL;
+	}
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -1606,6 +1619,10 @@ getVariableInternal(HTAB *variables, text *name, Oid typid, bool strict)
 					 errmsg("variable \"%s\" requires \"%s\" value",
 							key, var_type)));
 		}
+		if (!get_actual_value(variable)->is_valid && strict)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unrecognized variable \"%s\"", key)));
 	}
 	else
 	{
@@ -1684,12 +1701,13 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 			dlist_push_head(&variable->data, &historyEntry->node);
 			if (typid != RECORDOID)
 			{
-				ScalarVar  *scalar = get_actual_value_scalar(variable);
+				ScalarVar  *scalar = &(historyEntry->value.scalar);
 
 				get_typlenbyval(variable->typid, &scalar->typlen,
 								&scalar->typbyval);
-				scalar->is_null = true;
+				historyEntry->value.scalar.is_null = true;
 			}
+			historyEntry->is_valid = true;
 		}
 	}
 	/* If it is necessary, put variable to changedVars */
@@ -1734,7 +1752,7 @@ createSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
 		}
 		else
 			scalar->value = 0;
-
+		history_entry_new->is_valid = history_entry_prev->is_valid;
 		dlist_push_head(history, &history_entry_new->node);
 		MemoryContextSwitchTo(oldcxt);
 	}
@@ -1744,9 +1762,10 @@ createSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
  * Remove previous state of variable
  */
 static void
-releaseSavepoint(HashVariableEntry *variable)
+releaseSavepoint(HashPackageEntry *package, HashVariableEntry *variable)
 {
-	ValueHistory *history;
+	ValueHistory	  *history;
+	ValueHistoryEntry *historyEntry;
 
 	history = &variable->data;
 	if (dlist_has_next(history, dlist_head_node(history)))
@@ -1773,7 +1792,15 @@ releaseSavepoint(HashVariableEntry *variable)
 	 * If variable was changed in subtransaction, so it is considered it
 	 * was changed in parent transaction.
 	 */
-	(get_actual_value(variable)->level)--;
+	historyEntry = get_actual_value(variable);
+	historyEntry->level--;
+	if (!historyEntry->is_valid && 
+		!dlist_has_next(history, dlist_head_node(history)))
+	{
+		bool		found;
+
+		hash_search(package->variablesHash, variable->name, HASH_REMOVE, &found);
+	}
 }
 
 /*
@@ -1805,7 +1832,7 @@ isVarChangedInCurrentTrans(HashVariableEntry *variable)
 		return false;
 
 	var_state = get_actual_value(variable);
-	return (var_state->level == GetCurrentTransactionNestLevel());
+	return var_state->level == GetCurrentTransactionNestLevel();
 }
 
 /*
@@ -1822,7 +1849,7 @@ isVarChangedInUpperTrans(HashVariableEntry *variable)
 	if(dlist_has_next(&variable->data, &var_state->node))
 	{
 		var_prev_state = get_history_entry(var_state->node.next);
-		return (var_prev_state->level == (GetCurrentTransactionNestLevel() - 1));
+		return var_prev_state->level == (GetCurrentTransactionNestLevel() - 1);
 	}
 	return false;
 }
@@ -1989,7 +2016,7 @@ levelUpOrRelease()
 
 			cvn_old = dlist_container(ChangedVarsNode, node, iter.cur);
 			if (isVarChangedInUpperTrans(cvn_old->variable))
-				releaseSavepoint(cvn_old->variable);
+				releaseSavepoint(cvn_old->package, cvn_old->variable);
 			else
 			{
 				ChangedVarsNode *cvn_new;
@@ -2038,7 +2065,7 @@ applyActionOnChangedVars(Action action)
 		switch(action)
 		{
 			case RELEASE_SAVEPOINT:
-				releaseSavepoint(cvn->variable);
+				releaseSavepoint(cvn->package, cvn->variable);
 				break;
 			case ROLLBACK_TO_SAVEPOINT:
 				rollbackSavepoint(cvn->package, cvn->variable);

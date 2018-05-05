@@ -339,7 +339,7 @@ SELECT pgv_get('vars2', 'any1',NULL::text);
 
 SELECT pgv_free();
 
---Additional tests
+-- Additional tests
 SELECT pgv_insert('vars3', 'r1', tab, true) FROM tab;
 BEGIN;
 SELECT pgv_insert('vars3', 'r1', row(5 :: integer, 'before savepoint sp1' :: varchar),true);
@@ -393,3 +393,19 @@ SELECT pgv_get('vars', 'any1',NULL::text);
 BEGIN;
 SELECT pgv_set('vars', 'any1', 'wrong type'::varchar, true);
 COMMIT;
+
+-- THE REMOVAL OF THE VARIABLE MUST BE CANCELED ON ROLLBACK
+SELECT pgv_set('vars', 'any1', 'variable exists'::text, true);
+BEGIN;
+SELECT pgv_remove('vars', 'any1');
+SELECT pgv_exists('vars', 'any1');
+ROLLBACK;
+SELECT pgv_exists('vars', 'any1');
+SELECT pgv_get('vars', 'any1',NULL::text);
+
+BEGIN;
+SELECT pgv_remove('vars', 'any1');
+SELECT pgv_exists('vars', 'any1');
+COMMIT;
+SELECT pgv_exists('vars', 'any1');
+SELECT pgv_get('vars', 'any1',NULL::text);
