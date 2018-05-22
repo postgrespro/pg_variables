@@ -32,12 +32,25 @@
 #define NUMPACKAGES 8
 #define NUMVARIABLES 16
 
+/* List node that stores one of the package states */
+typedef struct PackHistoryEntry{
+	dlist_node	node;
+	bool is_valid;
+	int level;
+} PackHistoryEntry;
+
+typedef dlist_head PackHistory;
+
 typedef struct HashPackageEntry
 {
 	char		name[NAMEDATALEN];
-	HTAB	   *variablesHash;
+	HTAB	   *varHashRegular,
+			   *varHashTransact;
 	/* Memory context for package variables for easy memory release */
-	MemoryContext hctx;
+	MemoryContext hctxRegular,
+				  hctxTransact;
+	PackHistory   packHistory;
+
 } HashPackageEntry;
 
 typedef struct RecordVar
@@ -113,13 +126,21 @@ typedef struct ChangedVarsNode
 	HashVariableEntry *variable;
 } ChangedVarsNode;
 
-/* Element of stack with 'changedVars' list heads*/
-typedef struct ChangedVarsStackNode
+/* Element of list with packages, removed within transaction */
+typedef struct ChangedPacksNode
 {
 	dlist_node	node;
-	dlist_head  *changedVarsList;
+	HashPackageEntry *package;
+} ChangedPacksNode;
+
+/* Element of stack with 'changedVars' and 'changedPacks' list heads*/
+typedef struct ChangesStackNode
+{
+	dlist_node	node;
+	dlist_head *changedVarsList;
+	dlist_head *changedPacksList;
 	MemoryContext ctx;
-} ChangedVarsStackNode;
+} ChangesStackNode;
 
 extern void init_attributes(HashVariableEntry* variable, TupleDesc tupdesc,
 							MemoryContext topctx);
@@ -142,9 +163,13 @@ extern void insert_savepoint(HashVariableEntry *variable,
 	(&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.scalar))
 #define get_actual_value_record(variable) \
 	(&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.record))
-#define get_actual_value(variable) \
+#define get_actual_var_state(variable) \
 	(dlist_head_element(ValueHistoryEntry, node, &variable->data))
-#define get_history_entry(node_ptr) \
+#define get_var_history_entry(node_ptr) \
 	dlist_container(ValueHistoryEntry, node, node_ptr)
+#define get_actual_pack_state(package) \
+	(dlist_head_element(PackHistoryEntry, node, &package->packHistory))
+#define get_pack_history_entry(node_ptr) \
+	dlist_container(PackHistoryEntry, node, node_ptr)
 
 #endif   /* __PG_VARIABLES_H__ */

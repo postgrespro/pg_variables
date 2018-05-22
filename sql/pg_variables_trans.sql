@@ -409,3 +409,46 @@ SELECT pgv_exists('vars', 'any1');
 COMMIT;
 SELECT pgv_exists('vars', 'any1');
 SELECT pgv_get('vars', 'any1',NULL::text);
+
+SELECT * FROM pgv_list() ORDER BY package, name;
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+SELECT * FROM pgv_list() ORDER BY package, name;
+
+BEGIN;
+SELECT pgv_free();
+COMMIT;
+SELECT * FROM pgv_list() ORDER BY package, name;
+
+SELECT pgv_set('vars', 'regular', 'regular variable exists'::text);
+SELECT pgv_set('vars', 'trans1', 'trans1 variable exists'::text, true);
+BEGIN;
+SELECT pgv_free();
+SELECT * FROM pgv_list() ORDER BY package, name;
+SELECT pgv_set('vars', 'trans2', 'trans2 variable exists'::text, true);
+SELECT * FROM pgv_list() ORDER BY package, name;
+SELECT pgv_remove('vars');
+SELECT * FROM pgv_list() ORDER BY package, name;
+ROLLBACK;
+SELECT * FROM pgv_list() ORDER BY package, name;
+
+BEGIN;
+SAVEPOINT sp1;
+SAVEPOINT sp2;
+SAVEPOINT sp3;
+SELECT pgv_set('vars2', 'trans', 'variable exists'::text, true);
+SAVEPOINT sp4;
+SAVEPOINT sp5;
+--SELECT pgv_remove('vars2');
+SELECT pgv_free();
+SELECT pgv_stats();
+SELECT pgv_list();
+RELEASE sp5;
+SELECT pgv_stats();
+SELECT pgv_list();
+RELEASE sp4;
+SELECT pgv_stats();
+SELECT pgv_list();
+COMMIT;
+SELECT pgv_stats();
