@@ -22,7 +22,6 @@ SELECT * FROM pgv_list() order by package, name;
 ---------+------+------------------
  vars    | int1 | f
  vars    | int2 | f
-(2 rows)
 ```
 
 But if variable created with flag **is_transactional**:
@@ -34,11 +33,9 @@ SELECT pgv_set('vars', 'trans_int', 102, true);
 ROLLBACK TO sp1;
 COMMIT;
 SELECT pgv_get('vars', 'trans_int', NULL::int);
-
  pgv_get
 ---------
      101
-(1 row)
 ```
 
 ## License
@@ -194,13 +191,11 @@ SELECT pgv_get('vars', 'int1', NULL::int);
  pgv_get_int
 -------------
          101
-(1 row)
 
 SELECT SELECT pgv_get('vars', 'text1', NULL::text);
     pgv_get
 ---------------
  text variable
-(1 row)
 ```
 
 Let's assume we have a **tab** table:
@@ -220,26 +215,22 @@ SELECT pgv_select('vars', 'r1');
 ------------
  (1,str11)
  (0,str00)
-(2 rows)
 
 SELECT pgv_select('vars', 'r1', 1);
  pgv_select
 ------------
  (1,str11)
-(1 row)
 
 SELECT pgv_select('vars', 'r1', 0);
  pgv_select
 ------------
  (0,str00)
-(1 row)
 
 SELECT pgv_select('vars', 'r1', ARRAY[1, 0]);
  pgv_select
 ------------
  (1,str11)
  (0,str00)
-(2 rows)
 
 SELECT pgv_delete('vars', 'r1', 1);
 
@@ -247,7 +238,6 @@ SELECT pgv_select('vars', 'r1');
  pgv_select
 ------------
  (0,str00)
-(1 row)
 ```
 
 You can list packages and variables:
@@ -259,7 +249,6 @@ SELECT * FROM pgv_list() order by package, name;
  vars    | int1  | f
  vars    | r1    | f
  vars    | text1 | f
-(3 rows)
 ```
 
 And get used memory in bytes:
@@ -269,7 +258,6 @@ SELECT * FROM pgv_stats() order by package;
  package | allocated_memory
 ---------+------------------
  vars    |            32768
-(1 row)
 ```
 
 You can delete variables or whole packages:
@@ -288,6 +276,7 @@ If you want variables with support of transactions and savepoints, you should
 add flag `is_transactional = true` as the last argument in functions `pgv_set()`
 or `pgv_insert()`.
 Following use cases describe behavior of transactional variables:
+
 ```sql
 SELECT pgv_set('pack', 'var_text', 'before transaction block'::text, true);
 BEGIN;
@@ -307,17 +296,17 @@ SELECT pgv_get('pack', 'var_text', NULL::text);
      pgv_get
 ------------------
  before savepoint
-(1 row)
 
 ROLLBACK;
 SELECT pgv_get('pack', 'var_text', NULL::text);
          pgv_get
 --------------------------
  before transaction block
-
 ```
+
 If you create variable after `BEGIN` or `SAVEPOINT` statements and than rollback
 to previous state - variable will not be exist:
+
 ```sql
 BEGIN;
 SAVEPOINT sp1;
@@ -328,14 +317,15 @@ SELECT pgv_get('pack', 'var_int', NULL::int);
 pgv_get
 ---------
      122
-(1 row)
 
 ROLLBACK TO sp1;
 SELECT pgv_get('pack','var_int', NULL::int);
 ERROR:  unrecognized variable "var_int"
 COMMIT;
 ```
+
 Also you cannot undo removing variable by `ROLLBACK`:
+
 ```sql
 SELECT pgv_set('pack', 'var_int', 122, true);
 BEGIN;
@@ -344,18 +334,17 @@ ROLLBACK;
 SELECT pgv_get('pack', 'var_int', NULL::int);
 ERROR:  unrecognized package "pack"
 ```
+
 If you created transactional variable once, you should use flag `is_transactional`
 every time when you want to change variable value by functions `pgv_set()`,
 `pgv_insert()` and deprecated setters (i.e. `pgv_set_int()`). If you try to
 change this option, you'll get an error:
+
 ```sql
 SELECT pgv_insert('pack', 'var_record', row(123::int, 'text'::text), true);
- pgv_insert
-------------
-
-(1 row)
 
 SELECT pgv_insert('pack', 'var_record', row(456::int, 'another text'::text));
 ERROR:  variable "var_record" already created as TRANSACTIONAL
 ```
+
 Functions `pgv_update()` and `pgv_delete()` do not require this flag.
