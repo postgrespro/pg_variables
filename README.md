@@ -178,7 +178,7 @@ Function | Returns | Description
 `pgv_remove(package text)` | `void` | Removes the package and all package variables with the corresponding name. Required package must exists, otherwise the error will be raised.
 `pgv_free()` | `void` | Removes all packages and variables.
 `pgv_list()` | `table(package text, name text, is_transactional bool)` | Returns set of records of assigned packages and variables.
-`pgv_stats()` | `table(package text, used_memory bigint)` | Returns list of assigned packages and used memory in bytes.
+`pgv_stats()` | `table(package text, allocated_memory bigint)` | Returns list of assigned packages and used memory in bytes.
 
 Note that **pgv_stats()** works only with the PostgreSQL 9.6 and newer.
 
@@ -188,7 +188,7 @@ It is easy to use functions to work with scalar variables:
 
 ```sql
 SELECT pgv_set('vars', 'int1', 101);
-SELECT pgv_set('vars', 'int2', 102);
+SELECT pgv_set('vars', 'text1', 'text variable'::text);
 
 SELECT pgv_get('vars', 'int1', NULL::int);
  pgv_get_int
@@ -196,10 +196,10 @@ SELECT pgv_get('vars', 'int1', NULL::int);
          101
 (1 row)
 
-SELECT pgv_get('vars', 'int2', NULL::int);
- pgv_get_int
--------------
-         102
+SELECT SELECT pgv_get('vars', 'text1', NULL::text);
+    pgv_get
+---------------
+ text variable
 (1 row)
 ```
 
@@ -254,11 +254,11 @@ You can list packages and variables:
 
 ```sql
 SELECT * FROM pgv_list() order by package, name;
- package | name | is_transactional
----------+------+------------------
- vars    | int1 | f
- vars    | int2 | f
- vars    | r1   | f
+ package | name  | is_transactional
+---------+-------+------------------
+ vars    | int1  | f
+ vars    | r1    | f
+ vars    | text1 | f
 (3 rows)
 ```
 
@@ -266,9 +266,9 @@ And get used memory in bytes:
 
 ```sql
 SELECT * FROM pgv_stats() order by package;
- package | used_memory
----------+-------------
- vars    |       16736
+ package | allocated_memory
+---------+------------------
+ vars    |            32768
 (1 row)
 ```
 
