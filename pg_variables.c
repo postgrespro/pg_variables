@@ -107,12 +107,11 @@ static HashVariableEntry *LastVariable = NULL;
 static dlist_head *changesStack = NULL;
 static MemoryContext changesStackContext = NULL;
 
-/* Returns a list of of vars changed at current subxact level */
-#define get_actual_changed_vars_list() \
+/* Returns a lists of packages and variables changed at current subxact level */
+#define get_actual_changes_list() \
 	( \
 		AssertMacro(changesStack != NULL), \
-		(dlist_head_element(ChangesStackNode, \
-							node, changesStack))->changedVarsList \
+		(dlist_head_element(ChangesStackNode, node, changesStack)) \
 	)
 
 
@@ -1192,8 +1191,8 @@ get_packages_stats(PG_FUNCTION_ARGS)
 
 		/* Fill data */
 		values[0] = PointerGetDatum(cstring_to_text(package->name));
-
-		getMemoryTotalSpace(package->hctxRegular, 0, &regularSpace);
+		if (get_actual_pack_state(package)->is_valid)
+			getMemoryTotalSpace(package->hctxRegular, 0, &regularSpace);
 		getMemoryTotalSpace(package->hctxTransact, 0, &transactSpace);
 		totalSpace = regularSpace + transactSpace;
 		values[1] = Int64GetDatum(totalSpace);
@@ -1535,7 +1534,7 @@ createSavepointVar(HashPackageEntry *package, HashVariableEntry *variable)
 
 		/* Release memory for variable */
 		history_entry_new = palloc0(sizeof(ValueHistoryEntry));
-		history_entry_prev = dlist_head_element(ValueHistoryEntry, node, history);
+		history_entry_prev = get_actual_var_state(variable);
 		scalar = &history_entry_new->value.scalar;
 		*scalar = history_entry_prev->value.scalar;
 
@@ -1626,7 +1625,7 @@ createSavepointPack(HashPackageEntry *package)
 
 	history = &package->packHistory;
 	history_entry_new = MemoryContextAllocZero(ModuleContext, sizeof(PackHistoryEntry));
-	history_entry_prev = dlist_head_element(PackHistoryEntry, node, history);
+	history_entry_prev = get_actual_pack_state(package);
 	history_entry_new->is_valid = history_entry_prev->is_valid;
 	dlist_push_head(history, &history_entry_new->node);
 }
@@ -1666,8 +1665,8 @@ releaseSavepointPack(HashPackageEntry *package)
 		/* Remove package from packagesHash */
 		hash_search(packagesHash, package->name, HASH_REMOVE, &found);
 		/*
-		 *Delete a variable from the change history of the overlying
-		 *transaction level.
+		 * Delete a variable from the change history of the overlying
+		 * transaction level (head of 'changesStack' at this point)
 		 */
 		if (!dlist_is_empty(changesStack))
 			removeFromChangedVars(package);
@@ -1865,7 +1864,7 @@ addToChangedPacks(HashPackageEntry *package)
 	{
 		ChangedPacksNode *cpn;
 
-		csn = dlist_head_element(ChangesStackNode, node, changesStack);
+		csn = get_actual_changes_list();
 		cpn = makeChangedPacksNode(csn->ctx, package);
 		dlist_push_head(csn->changedPacksList, &cpn->node);
 
@@ -1898,7 +1897,7 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 	{
 		ChangedVarsNode *cvn;
 
-		csn = dlist_head_element(ChangesStackNode, node, changesStack);
+		csn = get_actual_changes_list();
 		cvn = makeChangedVarsNode(csn->ctx, package, variable);
 		dlist_push_head(csn->changedVarsList, &cvn->node);
 
@@ -1908,20 +1907,36 @@ addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 }
 
 /*
- * Remove from the changes list the variables of the deleted package
+ * Remove from the changes list a deleted package
  */
 static void
 removeFromChangedVars(HashPackageEntry *package)
 {
-	dlist_mutable_iter	var_miter;
-	dlist_head		   *changedVarsList;
+	dlist_mutable_iter	var_miter,
+						pack_miter;
+	dlist_head		   *changedVarsList,
+					   *changedPacksList;
 
-	changedVarsList = get_actual_changed_vars_list();
+	/* First remove corresponding variables from changedVarsList */
+	changedVarsList = get_actual_changes_list()->changedVarsList;
 	dlist_foreach_modify(var_miter, changedVarsList)
 	{
-		ChangedVarsNode *cvn_cur = dlist_container(ChangedVarsNode, node, var_miter.cur);
+		ChangedVarsNode *cvn_cur = dlist_container(ChangedVarsNode, node,
+													var_miter.cur);
 		if (cvn_cur->package == package)
 			dlist_delete(&cvn_cur->node);
+	}
+	/* Now remove package itself from changedPacksList */
+	changedPacksList = get_actual_changes_list()->changedPacksList;
+	dlist_foreach_modify(pack_miter, changedPacksList)
+	{
+		ChangedPacksNode *cpn_cur = dlist_container(ChangedPacksNode, node,
+													pack_miter.cur);
+		if (cpn_cur->package == package)
+		{
+			dlist_delete(&cpn_cur->node);
+			break;
+		}
 	}
 }
 

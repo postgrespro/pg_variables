@@ -1752,53 +1752,52 @@ SELECT pgv_set('vars2', 'trans', 'variable exists'::text, true);
 
 SAVEPOINT sp4;
 SAVEPOINT sp5;
---SELECT pgv_remove('vars2');
 SELECT pgv_free();
  pgv_free 
 ----------
  
 (1 row)
 
-SELECT pgv_stats();
-   pgv_stats   
----------------
- (vars2,24576)
- (vars,24576)
+SELECT package FROM pgv_stats();
+ package 
+---------
+ vars2
+ vars
 (2 rows)
 
-SELECT pgv_list();
- pgv_list 
-----------
+SELECT * FROM pgv_list() ORDER BY package, name;
+ package | name | is_transactional 
+---------+------+------------------
 (0 rows)
 
 RELEASE sp5;
-SELECT pgv_stats();
-   pgv_stats   
----------------
- (vars2,24576)
- (vars,24576)
+SELECT package FROM pgv_stats();
+ package 
+---------
+ vars2
+ vars
 (2 rows)
 
-SELECT pgv_list();
- pgv_list 
-----------
+SELECT * FROM pgv_list() ORDER BY package, name;
+ package | name | is_transactional 
+---------+------+------------------
 (0 rows)
 
 RELEASE sp4;
-SELECT pgv_stats();
-  pgv_stats   
---------------
- (vars,24576)
+SELECT package FROM pgv_stats();
+ package 
+---------
+ vars
 (1 row)
 
-SELECT pgv_list();
- pgv_list 
-----------
+SELECT * FROM pgv_list() ORDER BY package, name;
+ package | name | is_transactional 
+---------+------+------------------
 (0 rows)
 
 COMMIT;
-SELECT pgv_stats();
- pgv_stats 
------------
+SELECT package FROM pgv_stats();
+ package 
+---------
 (0 rows)
 
