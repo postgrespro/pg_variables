@@ -113,7 +113,10 @@ static MemoryContext changesStackContext = NULL;
 		AssertMacro(changesStack != NULL), \
 		(dlist_head_element(ChangesStackNode, node, changesStack)) \
 	)
-
+#define pack_hctx(pack, is_trans) \
+			(is_trans ? pack->hctxTransact : pack->hctxRegular)
+#define pack_htab(pack, is_trans) \
+			(is_trans ? pack->varHashTransact : pack->varHashRegular)
 
 #define PGV_MCXT_MAIN		"pg_variables: main memory context"
 #define PGV_MCXT_VARS		"pg_variables: variables hash"
@@ -157,9 +160,7 @@ variable_set(text *package_name, text *var_name,
 	scalar->is_null = is_null;
 	if (!scalar->is_null)
 	{
-		oldcxt = MemoryContextSwitchTo(is_transactional ?
-									   package->hctxTransact :
-									   package->hctxRegular);
+		oldcxt = MemoryContextSwitchTo(pack_hctx(package, is_transactional));
 		scalar->value = datumCopy(value, scalar->typbyval, scalar->typlen);
 		MemoryContextSwitchTo(oldcxt);
 	}
@@ -357,8 +358,7 @@ variable_insert(PG_FUNCTION_ARGS)
 		/*
 		 * This is the first record for the var_name. Initialize attributes.
 		 */
-		init_attributes(variable, tupdesc, is_transactional ?
-						package->hctxTransact : package->hctxRegular);
+		init_attributes(variable, tupdesc, pack_hctx(package, is_transactional));
 	}
 	else
 		check_attributes(variable, tupdesc);
@@ -1025,12 +1025,13 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 			{
 				HashVariableEntry *variable;
 				HASH_SEQ_STATUS vstat;
+				int i;
 
 				/* Skip packages marked as deleted */
 				if (!get_actual_pack_state(package)->is_valid)
 					continue;
 				/* Get variables list for package */
-				for(int i=0; i < 2; i++)
+				for (i=0; i < 2; i++)
 				{
 					hash_seq_init(&vstat, i ? package->varHashTransact :
 											  package->varHashRegular);
@@ -1268,7 +1269,7 @@ makePackHTAB(HashPackageEntry *package, bool is_trans)
 		package->hctxRegular = AllocSetContextCreate(ModuleContext,
 												PGV_MCXT_VARS,
 												ALLOCSET_DEFAULT_SIZES);
-	sprintf(hash_name, "%s variables hash for package \"%s\"",
+	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
 			is_trans ? "Transactional" : "Regular", key);
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(HashVariableEntry);
@@ -1447,9 +1448,8 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 				errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
 					key, is_transactional ? "NOT " : "")));
 
-	variable = (HashVariableEntry *) hash_search(is_transactional ?
-												 package->varHashTransact :
-												 package->varHashRegular,
+		variable = (HashVariableEntry *) hash_search(
+										pack_htab(package, is_transactional),
 												 key, HASH_ENTER, &found);
 
 	/* Check variable type */
@@ -1486,9 +1486,7 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 		variable->typid = typid;
 		variable->is_transactional = is_transactional;
 		dlist_init(&variable->data);
-		historyEntry = MemoryContextAllocZero(is_transactional ?
-											  package->hctxTransact :
-											  package->hctxRegular,
+		historyEntry = MemoryContextAllocZero(pack_hctx(package, is_transactional),
 											  sizeof(ValueHistoryEntry));
 
 		dlist_push_head(&variable->data, &historyEntry->node);
@@ -1816,7 +1814,7 @@ pushChangesStack(void)
 		changesStackContext = AllocSetContextCreate(ModuleContext,
 												   PGV_MCXT_STACK,
 												   ALLOCSET_START_SMALL_SIZES);
-
+	Assert(changesStackContext);
 	oldcxt = MemoryContextSwitchTo(changesStackContext);
 
 	if (!changesStack)
@@ -1824,7 +1822,7 @@ pushChangesStack(void)
 		changesStack = palloc0(sizeof(dlist_head));
 		dlist_init(changesStack);
 	}
-
+	Assert(changesStack);
 	csn = palloc0(sizeof(ChangesStackNode));
 	csn->changedVarsList = palloc0(sizeof(dlist_head));
 	csn->changedPacksList = palloc0(sizeof(dlist_head));
@@ -1841,13 +1839,11 @@ pushChangesStack(void)
 }
 
 /*
- * Add a package to list of created or removed packs in current transaction level
+ * Create a changesStack with the required depth.
  */
 static void
-addToChangedPacks(HashPackageEntry *package)
+prepareChangesStack(void)
 {
-	ChangesStackNode *csn;
-
 	if (!changesStack)
 	{
 		int level = GetCurrentTransactionNestLevel();
@@ -1857,11 +1853,18 @@ addToChangedPacks(HashPackageEntry *package)
 			pushChangesStack();
 		}
 	}
+}
 
-	Assert(changesStack && changesStackContext);
-
+/*
+ * Add a package to list of created or removed packs in current transaction level
+ */
+static void
+addToChangedPacks(HashPackageEntry *package)
+{
+	prepareChangesStack();
 	if (!isPackChangedInCurrentTrans(package))
 	{
+		ChangesStackNode *csn;
 		ChangedPacksNode *cpn;
 
 		csn = get_actual_changes_list();
@@ -1879,22 +1882,10 @@ addToChangedPacks(HashPackageEntry *package)
 static void
 addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable)
 {
-	ChangesStackNode *csn;
-
-	if (!changesStack)
-	{
-		int level = GetCurrentTransactionNestLevel();
-
-		while (level-- > 0)
-		{
-			pushChangesStack();
-		}
-	}
-
-	Assert(changesStack && changesStackContext);
-
+	prepareChangesStack();
 	if (!isVarChangedInCurrentTrans(variable))
 	{
+		ChangesStackNode *csn;
 		ChangedVarsNode *cvn;
 
 		csn = get_actual_changes_list();
@@ -1955,7 +1946,7 @@ typedef enum Action
  * apply corresponding action on them
  */
 static void
-proceedChanges(Action action)
+processChanges(Action action)
 {
 
 	ChangesStackNode   *bottom_list;
@@ -2093,10 +2084,10 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				pushChangesStack();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
-				proceedChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT);
 				break;
 			case SUBXACT_EVENT_ABORT_SUB:
-				proceedChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT);
 				break;
 			case SUBXACT_EVENT_PRE_COMMIT_SUB:
 				break;
@@ -2115,16 +2106,16 @@ pgvTransCallback(XactEvent event, void *arg)
 		switch (event)
 		{
 			case XACT_EVENT_PRE_COMMIT:
-				proceedChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT);
 				break;
 			case XACT_EVENT_ABORT:
-				proceedChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT);
 				break;
 			case XACT_EVENT_PARALLEL_PRE_COMMIT:
-				proceedChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT);
 				break;
 			case XACT_EVENT_PARALLEL_ABORT:
-				proceedChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT);
 				break;
 			default:
 				break;
