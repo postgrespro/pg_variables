@@ -1647,7 +1647,6 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	}
 	else
 	{
-		package = getObjectContainer(object, Variable)->package;
 		/* Remove current state */
 		removeState(object, VARIABLE, state);
 
