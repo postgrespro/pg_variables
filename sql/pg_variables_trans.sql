@@ -437,7 +437,7 @@ BEGIN;
 SAVEPOINT sp1;
 SAVEPOINT sp2;
 SAVEPOINT sp3;
-SELECT pgv_set('vars2', 'trans', 'variable exists'::text, true);
+SELECT pgv_set('vars2', 'trans2', 'trans2 variable exists'::text, true);
 SAVEPOINT sp4;
 SAVEPOINT sp5;
 SELECT pgv_free();

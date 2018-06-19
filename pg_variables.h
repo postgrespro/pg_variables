@@ -32,27 +32,6 @@
 #define NUMPACKAGES 8
 #define NUMVARIABLES 16
 
-/* List node that stores one of the package states */
-typedef struct PackHistoryEntry{
-	dlist_node	node;
-	bool is_valid;
-	int level;
-} PackHistoryEntry;
-
-typedef dlist_head PackHistory;
-
-typedef struct HashPackageEntry
-{
-	char		name[NAMEDATALEN];
-	HTAB	   *varHashRegular,
-			   *varHashTransact;
-	/* Memory context for package variables for easy memory release */
-	MemoryContext hctxRegular,
-				  hctxTransact;
-	PackHistory   history;
-
-} HashPackageEntry;
-
 typedef struct RecordVar
 {
 	HTAB	   *rhash;
@@ -73,34 +52,62 @@ typedef struct ScalarVar
 	int16		typlen;
 } ScalarVar;
 
-/* List node that stores one of the variables states */
-typedef struct VarHistoryEntry{
-	dlist_node	node;
+/* State of TransObject instance */
+typedef struct State
+{
+    dlist_node	node;
+    bool		is_valid;
+    int			level;
+} State;
+
+/* List node that stores one of the package's states */
+typedef struct PackState
+{
+	State		state;
+} PackState;
+
+/* List node that stores one of the variable's states */
+typedef struct VarState{
+	State 		state;
 	union
 	{
 		ScalarVar scalar;
 		RecordVar record;
 	}		value;
-	/* Transaction nest level of current entry */
-	int level;
-	bool is_valid;
-} VarHistoryEntry;
+} VarState;
 
-typedef dlist_head ValueHistory;
+typedef dlist_head StateStorage;
 
-/* Variable by itself */
-typedef struct HashVariableEntry
+/* Transactional object */
+typedef struct TransObject
 {
-	char		name[NAMEDATALEN];
-	/* Entry point to list with states of value */
-	ValueHistory history;
+	char			name[NAMEDATALEN];
+	StateStorage	stateStorage;
+} TransObject;
+
+/* Transactional package */
+typedef struct Package
+{
+	TransObject transObject;
+	HTAB	   *varHashRegular,
+			   *varHashTransact;
+	/* Memory context for package variables for easy memory release */
+	MemoryContext hctxRegular,
+				  hctxTransact;
+} Package;
+
+/* Transactional variable */
+typedef struct Variable
+{
+	TransObject	transObject;
+	Package	   *package;
 	Oid			typid;
 	/*
 	 * The flag determines the further behavior of the variable.
 	 * Can be specified only when creating a variable.
 	 */
 	bool		is_transactional;
-} HashVariableEntry;
+} Variable;
 
 typedef struct HashRecordKey
 {
@@ -118,20 +125,19 @@ typedef struct HashRecordEntry
 	HeapTuple	tuple;
 } HashRecordEntry;
 
-/* Element of list with variables, changed within transaction */
-typedef struct ChangedVarsNode
+/* Element of list with objects created, changed or removed within transaction */
+typedef struct ChangedObject
 {
-	dlist_node	node;
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
-} ChangedVarsNode;
+	dlist_node		node;
+	TransObject	   *object;
+} ChangedObject;
 
-/* Element of list with packages, removed within transaction */
-typedef struct ChangedPacksNode
+/* Type of transactional object instance */
+typedef enum TransObjectType
 {
-	dlist_node	node;
-	HashPackageEntry *package;
-} ChangedPacksNode;
+	PACKAGE,
+	VARIABLE
+} TransObjectType;
 
 /* Element of stack with 'changedVars' and 'changedPacks' list heads*/
 typedef struct ChangesStackNode
@@ -142,34 +148,52 @@ typedef struct ChangesStackNode
 	MemoryContext ctx;
 } ChangesStackNode;
 
-extern void init_attributes(HashVariableEntry* variable, TupleDesc tupdesc,
-							MemoryContext topctx);
-extern void check_attributes(HashVariableEntry *variable, TupleDesc tupdesc);
-extern void check_record_key(HashVariableEntry *variable, Oid typid);
+extern void init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable);
+extern void check_attributes(Variable *variable, TupleDesc tupdesc);
+extern void check_record_key(Variable *variable, Oid typid);
 
-extern void insert_record(HashVariableEntry* variable,
+extern void insert_record(Variable* variable,
 						  HeapTupleHeader tupleHeader);
-extern bool update_record(HashVariableEntry *variable,
+extern bool update_record(Variable *variable,
 						  HeapTupleHeader tupleHeader);
-extern bool delete_record(HashVariableEntry* variable, Datum value,
+extern bool delete_record(Variable* variable, Datum value,
 						  bool is_null);
-extern void clean_records(HashVariableEntry *variable);
 
-extern void insert_savepoint(HashVariableEntry *variable,
-							MemoryContext packageContext);
+/* Internal getters */
+/* pack-var */
+#define getActualStateOfContainer(object) \
+	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
+	 (dlist_head_element(State, node, &(object->transObject.stateStorage))))
 
-/* Internal macros to manage with dlist structure */
 #define getActualValueScalar(variable) \
-	(&((dlist_head_element(VarHistoryEntry, node, &variable->history))->value.scalar))
+	(AssertVariableIsOfTypeMacro(*variable, Variable), \
+	 &(((VarState *) getActualStateOfContainer(variable) - \
+									offsetof(VarState, state))->value.scalar))
+
 #define getActualValueRecord(variable) \
-	(&((dlist_head_element(VarHistoryEntry, node, &variable->history))->value.record))
-#define getActualStateOfVar(variable) \
-	(dlist_head_element(VarHistoryEntry, node, &variable->history))
-#define getActualStateOfPack(package) \
-	(dlist_head_element(PackHistoryEntry, node, &package->history))
-#define getHistoryEntryOfVar(node_ptr) \
-	dlist_container(VarHistoryEntry, node, node_ptr)
-#define getHistoryEntryOfPack(node_ptr) \
-	dlist_container(PackHistoryEntry, node, node_ptr)
+	(AssertVariableIsOfTypeMacro(*variable, Variable), \
+	 &(((VarState *) getActualStateOfContainer(variable) - \
+									offsetof(VarState, state))->value.record))
+
+#define getName(object) \
+	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
+	 object->transObject.name)
+
+#define getStateStorage(object) \
+	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
+	 &(object->transObject.stateStorage))
+
+/* State */
+#define getStateContainer(state_ptr) \
+	((VarState *) state_ptr - offsetof(VarState, state))
+
+/* TransObject */
+#define getObjectContainer(object_ptr, type) \
+	(AssertVariableIsOfTypeMacro(object_ptr, TransObject *), \
+	(type *) object_ptr - offsetof(type, transObject))
+
+#define getActualState(transObject) \
+	(AssertVariableIsOfTypeMacro(transObject, TransObject *), \
+	(dlist_head_element(State, node, &(transObject->stateStorage))))
 
 #endif   /* __PG_VARIABLES_H__ */

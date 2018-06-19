@@ -64,21 +64,22 @@ record_match(const void *key1, const void *key2, Size keysize)
 }
 
 void
-init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
-				MemoryContext topctx)
+init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 {
-	HASHCTL		ctl;
-	char		hash_name[BUFSIZ];
-	MemoryContext oldcxt;
-	RecordVar  *record;
+	HASHCTL			ctl;
+	char			hash_name[BUFSIZ];
+	MemoryContext	oldcxt,
+					topctx;
 	TypeCacheEntry *typentry;
-	Oid			keyid;
+	Oid				keyid;
 
 	Assert(variable->typid == RECORDOID);
 
-	sprintf(hash_name, "Records hash for variable \"%s\"", variable->name);
+	sprintf(hash_name, "Records hash for variable \"%s\"", getName(variable));
 
-	record = getActualValueRecord(variable);
+	topctx = variable->is_transactional ? 
+			 variable->package->hctxTransact :
+			 variable->package->hctxRegular;
 
 #if PG_VERSION_NUM >= 110000
 	record->hctx = AllocSetContextCreateExtended(topctx,
@@ -136,7 +137,7 @@ init_attributes(HashVariableEntry *variable, TupleDesc tupdesc,
  * New record structure should be the same as the first record.
  */
 void
-check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
+check_attributes(Variable *variable, TupleDesc tupdesc)
 {
 	int			i;
 	RecordVar  *record;
@@ -149,7 +150,7 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("new record structure differs from variable \"%s\" "
-						"structure", variable->name)));
+						"structure", getName(variable))));
 
 	/* Second, check columns type. */
 	for (i = 0; i < tupdesc->natts; i++)
@@ -163,7 +164,7 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
 			ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("new record structure differs from variable \"%s\" "
-						"structure", variable->name)));
+						"structure", getName(variable))));
 	}
 }
 
@@ -171,7 +172,7 @@ check_attributes(HashVariableEntry *variable, TupleDesc tupdesc)
  * Check record key type. If not same then throw a error.
  */
 void
-check_record_key(HashVariableEntry *variable, Oid typid)
+check_record_key(Variable *variable, Oid typid)
 {
 	RecordVar  *record;
 
@@ -182,14 +183,14 @@ check_record_key(HashVariableEntry *variable, Oid typid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("requested value type differs from variable \"%s\" "
-						"key type", variable->name)));
+						"key type", getName(variable))));
 }
 
 /*
  * Insert a new record. New record key should be unique in the variable.
  */
 void
-insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
+insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 {
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
@@ -237,7 +238,7 @@ insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("there is a record in the variable \"%s\" with same "
-						"key", variable->name)));
+						"key", getName(variable))));
 	}
 	/* Second, insert a new record */
 	item->tuple = tuple;
@@ -249,7 +250,7 @@ insert_record(HashVariableEntry *variable, HeapTupleHeader tupleHeader)
  * Insert a record. New record key should be unique in the variable.
  */
 bool
-update_record(HashVariableEntry* variable, HeapTupleHeader tupleHeader)
+update_record(Variable* variable, HeapTupleHeader tupleHeader)
 {
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
@@ -305,7 +306,7 @@ update_record(HashVariableEntry* variable, HeapTupleHeader tupleHeader)
 }
 
 bool
-delete_record(HashVariableEntry *variable, Datum value, bool is_null)
+delete_record(Variable *variable, Datum value, bool is_null)
 {
 	HashRecordKey k;
 	HashRecordEntry *item;
@@ -328,61 +329,4 @@ delete_record(HashVariableEntry *variable, Datum value, bool is_null)
 		heap_freetuple(item->tuple);
 
 	return found;
-}
-
-/*
- * Free allocated space for records hash table and datums array.
- */
-void
-clean_records(HashVariableEntry *variable)
-{
-	RecordVar  *record;
-
-	Assert(variable->typid == RECORDOID);
-
-	record = getActualValueRecord(variable);
-	/* All records will be freed */
-	MemoryContextDelete(record->hctx);
-}
-
-/*
- * Create a new history point of record variable and copy all tulpes from
- * previous state
- */
-void
-insert_savepoint(HashVariableEntry *variable, MemoryContext packageContext)
-{
-	RecordVar  *record_prev,
-			   *record_new;
-	HashRecordEntry *item_prev,
-			   *item_new;
-	VarHistoryEntry *history_entry_new;
-	HASH_SEQ_STATUS *rstat;
-	bool		found;
-	MemoryContext oldcxt;
-
-	Assert(variable->typid == RECORDOID);
-
-	/* Create new history entry */
-	record_prev = getActualValueRecord(variable);
-	oldcxt = MemoryContextSwitchTo(packageContext);
-	history_entry_new = palloc0(sizeof(VarHistoryEntry));
-	history_entry_new->is_valid = true;
-	record_new = &(history_entry_new->value.record);
-	dlist_push_head(&variable->history, &history_entry_new->node);
-	init_attributes(variable, record_prev->tupdesc, packageContext);
-
-	/* Copy previous history entry into the new one*/
-	rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
-	hash_seq_init(rstat, record_prev->rhash);
-	while((item_prev = (HashRecordEntry *) hash_seq_search(rstat)) !=NULL)
-	{
-		HashRecordKey k;
-
-		k = item_prev->key;
-		item_new = (HashRecordEntry *) hash_search(record_new->rhash, &k,
-												   HASH_ENTER, &found);
-		item_new->tuple = heap_copytuple(item_prev->tuple);
-	}
-	MemoryContextSwitchTo(oldcxt);
 }

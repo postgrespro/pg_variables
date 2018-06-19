@@ -49,38 +49,43 @@ extern void _PG_fini(void);
 static void ensurePackagesHashExists(void);
 static void getKeyFromName(text *name, char *key);
 
-static HashPackageEntry *getPackageByName(text *name, bool create, bool strict);
-static HashVariableEntry *getVariableInternal(HashPackageEntry *package,
+static Package *getPackageByName(text *name, bool create, bool strict);
+static Variable *getVariableInternal(Package *package,
 											  text *name, Oid typid,
 											  bool strict);
-static HashVariableEntry *createVariableInternal(HashPackageEntry *package,
+static Variable *createVariableInternal(Package *package,
 												 text *name, Oid typid,
 												 bool is_transactional);
-static void removePackageInternal(HashPackageEntry *package);
+static void removePackageInternal(Package *package);
 
-static void releaseSavepointPack(HashPackageEntry *package);
-static void rollbackSavepointPack(HashPackageEntry *package);
-static void createSavepointPack(HashPackageEntry *package);
-static void releaseSavepointVar(HashPackageEntry *package, HashVariableEntry *variable);
-static void rollbackSavepointVar(HashPackageEntry *package, HashVariableEntry *variable);
-static void createSavepointVar(HashPackageEntry *package, HashVariableEntry *variable);
+/* Functions to work with transactional objects */
+static void createSavepoint(TransObject *object, TransObjectType type);
+static void releaseSavepoint(TransObject *object, TransObjectType type);
+static void rollbackSavepoint(TransObject *object, TransObjectType type);
 
+static void copyValue(VarState *src, VarState *dest, Variable *destVar);
+static void freeValue(VarState *varstate, Oid typid);
+static void removeState(TransObject *object, TransObjectType type, State *stateToDelete);
+static void removeObject(TransObject *object, TransObjectType type);
+static bool isObjectChangedInCurrentTrans(TransObject *object);
+static bool isObjectChangedInUpperTrans(TransObject *object);
+
+static void addToChangesStack(TransObject *object, TransObjectType type);
 static void pushChangesStack(void);
-static void addToChangedPacks(HashPackageEntry *package);
-static void addToChangedVars(HashPackageEntry *package, HashVariableEntry *variable);
-static void removeFromChangedVars(HashPackageEntry *package);
+static void removeFromChangedVars(Package *package);
 
-static inline ChangedPacksNode *
-makeChangedPacksNode(MemoryContext ctx, HashPackageEntry *package);
-static inline ChangedVarsNode *
-makeChangedVarsNode(MemoryContext ctx, HashPackageEntry *package, HashVariableEntry *variable);
+/* Wrappers */
+static inline void createSavepointPack(Package *package);
+static inline void createSavepointVar(Variable *variable);
+static inline void addToChangedPacks(Package *package);
+static inline void addToChangedVars(Variable *variable);
+
+/* Constructors */
 static void
-makePackHTAB(HashPackageEntry *package, bool is_trans);
+makePackHTAB(Package *package, bool is_trans);
+static inline ChangedObject *
+makeChangedObject(TransObject *object, MemoryContext ctx);
 
-static bool isPackChangedInCurrentTrans(HashPackageEntry *package);
-static bool isPackChangedInUpperTrans(HashPackageEntry *package);
-static bool isVarChangedInCurrentTrans(HashVariableEntry *variable);
-static bool isVarChangedInUpperTrans(HashVariableEntry *variable);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -98,9 +103,9 @@ static HTAB *packagesHash = NULL;
 static MemoryContext ModuleContext = NULL;
 
 /* Recent package */
-static HashPackageEntry *LastPackage = NULL;
+static Package *LastPackage = NULL;
 /* Recent variable */
-static HashVariableEntry *LastVariable = NULL;
+static Variable *LastVariable = NULL;
 
 
 /* This stack contains lists of changed variables and packages per each subxact level */
@@ -142,8 +147,8 @@ static void
 variable_set(text *package_name, text *var_name,
 			 Oid typid, Datum value, bool is_null, bool is_transactional)
 {
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package *package;
+	Variable *variable;
 	ScalarVar  *scalar;
 	MemoryContext oldcxt;
 
@@ -172,8 +177,8 @@ static Datum
 variable_get(text *package_name, text *var_name,
 			 Oid typid, bool *is_null, bool strict)
 {
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package *package;
+	Variable *variable;
 	ScalarVar  *scalar;
 
 	package = getPackageByName(package_name, false, strict);
@@ -282,13 +287,14 @@ variable_insert(PG_FUNCTION_ARGS)
 	text	   *package_name;
 	text	   *var_name;
 	HeapTupleHeader rec;
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package	   *package;
+	Variable   *variable;
 	bool		is_transactional;
 
 	Oid			tupType;
 	int32		tupTypmod;
 	TupleDesc	tupdesc;
+	RecordVar  *record;
 
 	/* Checks */
 	CHECK_ARGS_FOR_NULL();
@@ -306,8 +312,8 @@ variable_insert(PG_FUNCTION_ARGS)
 
 	/* Get cached package */
 	if (LastPackage == NULL ||
-		VARSIZE_ANY_EXHDR(package_name) != strlen(LastPackage->name) ||
-		strncmp(VARDATA_ANY(package_name), LastPackage->name,
+		VARSIZE_ANY_EXHDR(package_name) != strlen(getName(LastPackage)) ||
+		strncmp(VARDATA_ANY(package_name), getName(LastPackage),
 				VARSIZE_ANY_EXHDR(package_name)) != 0)
 	{
 		package = getPackageByName(package_name, true, false);
@@ -319,8 +325,8 @@ variable_insert(PG_FUNCTION_ARGS)
 
 	/* Get cached variable */
 	if (LastVariable == NULL ||
-		VARSIZE_ANY_EXHDR(var_name) != strlen(LastVariable->name) ||
-		strncmp(VARDATA_ANY(var_name), LastVariable->name,
+		VARSIZE_ANY_EXHDR(var_name) != strlen(getName(LastPackage)) ||
+		strncmp(VARDATA_ANY(var_name), getName(LastPackage),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
 		variable = createVariableInternal(package, var_name, RECORDOID,
@@ -341,10 +347,10 @@ variable_insert(PG_FUNCTION_ARGS)
 					 errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
 							key, LastVariable->is_transactional ? "" : "NOT ")));
 		}
-		if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
+		if (variable->is_transactional && !isObjectChangedInCurrentTrans(&variable->transObject))
 		{
-			createSavepointVar(package, variable);
-			addToChangedVars(package, variable);
+			createSavepointVar(variable);
+			addToChangedVars(variable);
 		}
 	}
 
@@ -352,13 +358,13 @@ variable_insert(PG_FUNCTION_ARGS)
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
 	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
-
-	if (!(getActualValueRecord(variable))->tupdesc)
+	record = getActualValueRecord(variable);
+	if (!record->tupdesc)
 	{
 		/*
 		 * This is the first record for the var_name. Initialize attributes.
 		 */
-		init_attributes(variable, tupdesc, pack_hctx(package, is_transactional));
+		init_record(record, tupdesc, variable);
 	}
 	else
 		check_attributes(variable, tupdesc);
@@ -380,10 +386,9 @@ variable_update(PG_FUNCTION_ARGS)
 	text	   *package_name;
 	text	   *var_name;
 	HeapTupleHeader rec;
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package	   *package;
+	Variable   *variable;
 	bool		res;
-
 	Oid			tupType;
 	int32		tupTypmod;
 	TupleDesc	tupdesc;
@@ -403,8 +408,8 @@ variable_update(PG_FUNCTION_ARGS)
 
 	/* Get cached package */
 	if (LastPackage == NULL ||
-		VARSIZE_ANY_EXHDR(package_name) != strlen(LastPackage->name) ||
-		strncmp(VARDATA_ANY(package_name), LastPackage->name,
+		VARSIZE_ANY_EXHDR(package_name) != strlen(getName(LastPackage)) ||
+		strncmp(VARDATA_ANY(package_name), getName(LastPackage),
 				VARSIZE_ANY_EXHDR(package_name)) != 0)
 	{
 		package = getPackageByName(package_name, false, true);
@@ -416,8 +421,8 @@ variable_update(PG_FUNCTION_ARGS)
 
 	/* Get cached variable */
 	if (LastVariable == NULL ||
-		VARSIZE_ANY_EXHDR(var_name) != strlen(LastVariable->name) ||
-		strncmp(VARDATA_ANY(var_name), LastVariable->name,
+		VARSIZE_ANY_EXHDR(var_name) != strlen(getName(LastVariable)) ||
+		strncmp(VARDATA_ANY(var_name), getName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
 		variable = getVariableInternal(package, var_name, RECORDOID, true);
@@ -426,10 +431,10 @@ variable_update(PG_FUNCTION_ARGS)
 	else
 		variable = LastVariable;
 
-	if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
+	if (variable->is_transactional && !isObjectChangedInCurrentTrans(&variable->transObject))
 	{
-		createSavepointVar(package, variable);
-		addToChangedVars(package, variable);
+		createSavepointVar(variable);
+		addToChangedVars(variable);
 	}
 
 	/* Update a record */
@@ -457,8 +462,8 @@ variable_delete(PG_FUNCTION_ARGS)
 	Oid			value_type;
 	Datum		value;
 	bool		value_is_null = PG_ARGISNULL(2);
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package	   *package;
+	Variable   *variable;
 	bool		res;
 
 	CHECK_ARGS_FOR_NULL();
@@ -480,8 +485,8 @@ variable_delete(PG_FUNCTION_ARGS)
 
 	/* Get cached package */
 	if (LastPackage == NULL ||
-		VARSIZE_ANY_EXHDR(package_name) != strlen(LastPackage->name) ||
-		strncmp(VARDATA_ANY(package_name), LastPackage->name,
+		VARSIZE_ANY_EXHDR(package_name) != strlen(getName(LastPackage)) ||
+		strncmp(VARDATA_ANY(package_name), getName(LastPackage),
 				VARSIZE_ANY_EXHDR(package_name)) != 0)
 	{
 		package = getPackageByName(package_name, false, true);
@@ -493,8 +498,8 @@ variable_delete(PG_FUNCTION_ARGS)
 
 	/* Get cached variable */
 	if (LastVariable == NULL ||
-		VARSIZE_ANY_EXHDR(var_name) != strlen(LastVariable->name) ||
-		strncmp(VARDATA_ANY(var_name), LastVariable->name,
+		VARSIZE_ANY_EXHDR(var_name) != strlen(getName(LastVariable)) ||
+		strncmp(VARDATA_ANY(var_name), getName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
 		variable = getVariableInternal(package, var_name, RECORDOID, true);
@@ -503,10 +508,11 @@ variable_delete(PG_FUNCTION_ARGS)
 	else
 		variable = LastVariable;
 
-	if (variable->is_transactional && !isVarChangedInCurrentTrans(variable))
+	if (variable->is_transactional &&
+		!isObjectChangedInCurrentTrans(&variable->transObject))
 	{
-		createSavepointVar(package, variable);
-		addToChangedVars(package, variable);
+		createSavepointVar(variable);
+		addToChangedVars(variable);
 	}
 
 	/* Delete a record */
@@ -532,8 +538,8 @@ variable_select(PG_FUNCTION_ARGS)
 	{
 		text	   *package_name;
 		text	   *var_name;
-		HashPackageEntry *package;
-		HashVariableEntry *variable;
+		Package	   *package;
+		Variable   *variable;
 		MemoryContext oldcontext;
 		RecordVar  *record;
 
@@ -590,8 +596,8 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	Oid			value_type;
 	Datum		value;
 	bool		value_is_null = PG_ARGISNULL(2);
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package	   *package;
+	Variable   *variable;
 
 	HashRecordEntry *item;
 	RecordVar  *record;
@@ -644,7 +650,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 /* Structure for variable_select_by_values() */
 typedef struct
 {
-	HashVariableEntry *variable;
+	Variable	 *variable;
 	ArrayIterator iterator;
 } VariableIteratorRec;
 
@@ -662,8 +668,8 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		text	   *package_name;
 		text	   *var_name;
 		ArrayType  *values;
-		HashPackageEntry *package;
-		HashVariableEntry *variable;
+		Package	   *package;
+		Variable   *variable;
 		MemoryContext oldcontext;
 
 		/* Checks */
@@ -740,41 +746,6 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 }
 
 /*
- * Remove one entry from history of states of arg 'variable'
- */
-static void
-cleanVariableCurrentState(HashVariableEntry *variable)
-{
-	VarHistoryEntry *historyEntryToDelete;
-
-	if (variable->typid == RECORDOID)
-		clean_records(variable);
-	else
-	{
-		ScalarVar  *scalar = getActualValueScalar(variable);
-
-		if (scalar->typbyval == false && scalar->is_null == false)
-			pfree(DatumGetPointer(scalar->value));
-	}
-
-	historyEntryToDelete = getHistoryEntryOfVar(dlist_pop_head_node(&variable->history));
-	pfree(historyEntryToDelete);
-}
-
-/*
- * Remove all entries from history of states of arg 'variable'.
- * DOES NOT remove 'variable' itself.
- */
-static void
-cleanVariableAllStates(HashVariableEntry *variable)
-{
-	while(!dlist_is_empty(&variable->history))
-	{
-		cleanVariableCurrentState(variable);
-	}
-}
-
-/*
  * Check if variable exists.
  */
 Datum
@@ -782,8 +753,8 @@ variable_exists(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
-	HashPackageEntry  *package;
-	HashVariableEntry *variable;
+	Package	   *package;
+	Variable   *variable;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -803,16 +774,16 @@ variable_exists(PG_FUNCTION_ARGS)
 
 	getKeyFromName(var_name, key);
 
-	variable = (HashVariableEntry *) hash_search(package->varHashRegular,
-												 key, HASH_FIND, &found);
+	variable = (Variable *) hash_search(package->varHashRegular,
+										key, HASH_FIND, &found);
 	if (!found)
-		variable = (HashVariableEntry *) hash_search(package->varHashTransact,
-													 key, HASH_FIND, &found);
+		variable = (Variable *) hash_search(package->varHashTransact,
+											key, HASH_FIND, &found);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
 
-	PG_RETURN_BOOL(found ? getActualStateOfVar(variable)->is_valid : found);
+	PG_RETURN_BOOL(found ? (getActualStateOfContainer(variable))->is_valid : found);
 }
 
 /*
@@ -845,8 +816,8 @@ remove_variable(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
+	Package	   *package;
+	Variable   *variable;
 	bool		found;
 	char		key[NAMEDATALEN];
 
@@ -858,27 +829,30 @@ remove_variable(PG_FUNCTION_ARGS)
 	package = getPackageByName(package_name, false, true);
 	getKeyFromName(var_name, key);
 
-	variable = (HashVariableEntry *) hash_search(package->varHashRegular,
-												 key, HASH_REMOVE, &found);
+	variable = (Variable *) hash_search(package->varHashRegular,
+										key, HASH_REMOVE, &found);
 	if (found)
+	{
 		/* Regular variable */
-		cleanVariableAllStates(variable);
+		TransObject *object = &variable->transObject;
+		removeState(object, VARIABLE, getActualState(object));
+	}
 	else
 	{
-		variable = (HashVariableEntry *) hash_search(package->varHashTransact,
-												 key, HASH_FIND, &found);
+		variable = (Variable *) hash_search(package->varHashTransact,
+											key, HASH_FIND, &found);
 		/* Variable doesn't exist in both HTAB */
 		if (!found)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					errmsg("unrecognized variable \"%s\"", key)));
 		/* Transactional variable */
-		if (!isVarChangedInCurrentTrans(variable))
+		if (!isObjectChangedInCurrentTrans(&variable->transObject))
 		{
-			createSavepointVar(package, variable);
-			addToChangedVars(package, variable);
+			createSavepointVar(variable);
+			addToChangedVars(variable);
 		}
-		getActualStateOfVar(variable)->is_valid = false;
+		getActualStateOfContainer(variable)->is_valid = false;
 	}
 
 	/* Remove variable from cache */
@@ -896,7 +870,7 @@ remove_variable(PG_FUNCTION_ARGS)
 Datum
 remove_package(PG_FUNCTION_ARGS)
 {
-	HashPackageEntry   *package;
+	Package	   *package;
 	text	   *package_name;
 	char		key[NAMEDATALEN];
 
@@ -927,18 +901,18 @@ remove_package(PG_FUNCTION_ARGS)
 }
 
 static void
-removePackageInternal(HashPackageEntry *package)
+removePackageInternal(Package *package)
 {
 	/* All regular variables will be freed */
 	MemoryContextDelete(package->hctxRegular);
 
 	/* Add to changes list */
-	if (!isPackChangedInCurrentTrans(package))
+	if (!isObjectChangedInCurrentTrans(&package->transObject))
 	{
 		createSavepointPack(package);
 		addToChangedPacks(package);
 	}
-	getActualStateOfPack(package)->is_valid = false;
+	getActualStateOfContainer(package)->is_valid = false;
 }
 
 /*
@@ -948,8 +922,8 @@ removePackageInternal(HashPackageEntry *package)
 Datum
 remove_packages(PG_FUNCTION_ARGS)
 {
-	HashPackageEntry *package;
-	HASH_SEQ_STATUS	  pstat;
+	Package *package;
+	HASH_SEQ_STATUS	pstat;
 	/* There is no any packages and variables */
 	if (packagesHash == NULL)
 		PG_RETURN_VOID();
@@ -958,7 +932,7 @@ remove_packages(PG_FUNCTION_ARGS)
 	/* Get packages list */
 	hash_seq_init(&pstat, packagesHash);
 	while ((package =
-		(HashPackageEntry *) hash_seq_search(&pstat)) != NULL)
+		(Package *) hash_seq_search(&pstat)) != NULL)
 	{
 		removePackageInternal(package);
 	}
@@ -1011,7 +985,7 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 		 */
 		if (packagesHash)
 		{
-			HashPackageEntry *package;
+			Package *package;
 			HASH_SEQ_STATUS pstat;
 			int			mRecs = NUMVARIABLES,
 						nRecs = 0;
@@ -1021,14 +995,14 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 			/* Get packages list */
 			hash_seq_init(&pstat, packagesHash);
 			while ((package =
-				(HashPackageEntry *) hash_seq_search(&pstat)) != NULL)
+				(Package *) hash_seq_search(&pstat)) != NULL)
 			{
-				HashVariableEntry *variable;
+				Variable *variable;
 				HASH_SEQ_STATUS vstat;
 				int i;
 
 				/* Skip packages marked as deleted */
-				if (!getActualStateOfPack(package)->is_valid)
+				if (!getActualStateOfContainer(package)->is_valid)
 					continue;
 				/* Get variables list for package */
 				for (i=0; i < 2; i++)
@@ -1036,9 +1010,9 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 					hash_seq_init(&vstat, i ? package->varHashTransact :
 											  package->varHashRegular);
 					while ((variable =
-						(HashVariableEntry *) hash_seq_search(&vstat)) != NULL)
+						(Variable *) hash_seq_search(&vstat)) != NULL)
 					{
-						if (!getActualStateOfVar(variable)->is_valid)
+						if (!getActualStateOfContainer(variable)->is_valid)
 							continue;
 						/* Resize recs if necessary */
 						if (nRecs >= mRecs)
@@ -1048,8 +1022,8 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 													sizeof(VariableRec) * mRecs);
 						}
 
-						recs[nRecs].package = package->name;
-						recs[nRecs].variable = variable->name;
+						recs[nRecs].package = getName(package);
+						recs[nRecs].variable = getName(variable);
 						recs[nRecs].is_transactional = variable->is_transactional;
 						nRecs++;
 					}
@@ -1134,7 +1108,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	FuncCallContext *funcctx;
 	MemoryContext oldcontext;
 	HASH_SEQ_STATUS *pstat;
-	HashPackageEntry *package;
+	Package			*package;
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -1177,7 +1151,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	/* Get packages list */
 	pstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
 
-	package = (HashPackageEntry *) hash_seq_search(pstat);
+	package = (Package *) hash_seq_search(pstat);
 	if (package != NULL)
 	{
 		Datum		values[2];
@@ -1191,8 +1165,8 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		memset(nulls, 0, sizeof(nulls));
 
 		/* Fill data */
-		values[0] = PointerGetDatum(cstring_to_text(package->name));
-		if (getActualStateOfPack(package)->is_valid)
+		values[0] = PointerGetDatum(cstring_to_text(getName(package)));
+		if (getActualStateOfContainer(package)->is_valid)
 			getMemoryTotalSpace(package->hctxRegular, 0, &regularSpace);
 		getMemoryTotalSpace(package->hctxTransact, 0, &transactSpace);
 		totalSpace = regularSpace + transactSpace;
@@ -1243,7 +1217,7 @@ ensurePackagesHashExists(void)
 										  ALLOCSET_DEFAULT_SIZES);
 
 	ctl.keysize = NAMEDATALEN;
-	ctl.entrysize = sizeof(HashPackageEntry);
+	ctl.entrysize = sizeof(Package);
 	ctl.hcxt = ModuleContext;
 
 	packagesHash = hash_create("Packages hash",
@@ -1255,7 +1229,7 @@ ensurePackagesHashExists(void)
  * Initialize a hash table with proper vars type
  */
 static void
-makePackHTAB(HashPackageEntry *package, bool is_trans)
+makePackHTAB(Package *package, bool is_trans)
 {
 	HASHCTL		ctl;
 	char		key[NAMEDATALEN],
@@ -1272,7 +1246,7 @@ makePackHTAB(HashPackageEntry *package, bool is_trans)
 	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
 			is_trans ? "Transactional" : "Regular", key);
 	ctl.keysize = NAMEDATALEN;
-	ctl.entrysize = sizeof(HashVariableEntry);
+	ctl.entrysize = sizeof(Variable);
 	ctl.hcxt = (is_trans ? package->hctxTransact : package->hctxRegular);
 	if (is_trans)
 		package->varHashTransact = hash_create(hash_name,
@@ -1284,11 +1258,11 @@ makePackHTAB(HashPackageEntry *package, bool is_trans)
 											HASH_ELEM | HASH_CONTEXT);
 }
 
-static HashPackageEntry *
+static Package *
 getPackageByName(text* name, bool create, bool strict)
 {
-	HashPackageEntry *package;
-	PackHistoryEntry *historyEntry;
+	Package	   *package;
+	PackState  *packState;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -1310,38 +1284,38 @@ getPackageByName(text* name, bool create, bool strict)
 	}
 
 	/* Find or create a package entry */
-	package = (HashPackageEntry *) hash_search(packagesHash, key,
-											   create ? HASH_ENTER : HASH_FIND,
-											   &found);
+	package = (Package *) hash_search(packagesHash, key,
+									  create ? HASH_ENTER : HASH_FIND,
+									  &found);
 
 	if (found)
 	{
-		if (getActualStateOfPack(package)->is_valid)
+		if (getActualStateOfContainer(package)->is_valid)
 			return package;
 		else if (create)
 		{
 			HASH_SEQ_STATUS	  vstat;
-			HashVariableEntry *variable;
+			Variable *variable;
 			/* Make new history entry of package */
-			if (!isPackChangedInCurrentTrans(package))
+			if (!isObjectChangedInCurrentTrans(&package->transObject))
 			{
 				createSavepointPack(package);
 				addToChangedPacks(package);
 			}
-			getActualStateOfPack(package)->is_valid = true;
+			getActualStateOfContainer(package)->is_valid = true;
 			/* Restore previously removed HTAB for regular variables */
 			makePackHTAB(package, false);
 			/* Mark all transactional variables in package as removed */
 			hash_seq_init(&vstat, package->varHashTransact);
 			while ((variable =
-				(HashVariableEntry *) hash_seq_search(&vstat)) != NULL)
+				(Variable *) hash_seq_search(&vstat)) != NULL)
 			{
-				if (!isVarChangedInCurrentTrans(variable))
+				if (!isObjectChangedInCurrentTrans(&variable->transObject))
 				{
-					createSavepointVar(package, variable);
-					addToChangedVars(package, variable);
+					createSavepointVar(variable);
+					addToChangedVars(variable);
 				}
-				getActualStateOfVar(variable)->is_valid = false;
+				getActualStateOfContainer(variable)->is_valid = false;
 			}
 			return package;
 		}
@@ -1366,11 +1340,10 @@ getPackageByName(text* name, bool create, bool strict)
 	makePackHTAB(package, false);
 	makePackHTAB(package, true);
 	/* Initialize history */
-	dlist_init(&package->history);
-	historyEntry = MemoryContextAllocZero(ModuleContext,
-											   sizeof(PackHistoryEntry));
-	dlist_push_head(&package->history, &historyEntry->node);
-	historyEntry->is_valid = true;
+	dlist_init(getStateStorage(package));
+	packState = MemoryContextAllocZero(ModuleContext, sizeof(PackState));
+	dlist_push_head(getStateStorage(package), &(packState->state.node));
+	packState->state.is_valid = true;
 	/* Add to changes list */
 	addToChangedPacks(package);
 	return package;
@@ -1381,20 +1354,20 @@ getPackageByName(text* name, bool create, bool strict)
  * Function is useful to request a value of existing variable and
  * flag 'is_transactional' of this variable is unknown.
  */
-static HashVariableEntry *
-getVariableInternal(HashPackageEntry *package, text *name, Oid typid, bool strict)
+static Variable *
+getVariableInternal(Package *package, text *name, Oid typid, bool strict)
 {
-	HashVariableEntry *variable;
+	Variable *variable;
 	char		key[NAMEDATALEN];
 	bool		found;
 
 	getKeyFromName(name, key);
 
-	variable = (HashVariableEntry *) hash_search(package->varHashRegular,
-												 key, HASH_FIND, &found);
+	variable = (Variable *) hash_search(package->varHashRegular,
+										key, HASH_FIND, &found);
 	if (!found)
-		variable = (HashVariableEntry *) hash_search(package->varHashTransact,
-													 key, HASH_FIND, &found);
+		variable = (Variable *) hash_search(package->varHashTransact,
+											key, HASH_FIND, &found);
 
 	/* Check variable type */
 	if (found)
@@ -1409,7 +1382,7 @@ getVariableInternal(HashPackageEntry *package, text *name, Oid typid, bool stric
 					 errmsg("variable \"%s\" requires \"%s\" value",
 							key, var_type)));
 		}
-		if (!getActualStateOfVar(variable)->is_valid && strict)
+		if (!getActualStateOfContainer(variable)->is_valid && strict)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("unrecognized variable \"%s\"", key)));
@@ -1430,11 +1403,11 @@ getVariableInternal(HashPackageEntry *package, text *name, Oid typid, bool stric
  * Function is useful to set new value to variable and
  * flag 'is_transactional' is known.
  */
-static HashVariableEntry *
-createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
+static Variable *
+createVariableInternal(Package *package, text *name, Oid typid,
 						bool is_transactional)
 {
-	HashVariableEntry *variable;
+	Variable   *variable;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -1448,8 +1421,7 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 				errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
 					key, is_transactional ? "NOT " : "")));
 
-		variable = (HashVariableEntry *) hash_search(
-										pack_htab(package, is_transactional),
+	variable = (Variable *) hash_search(pack_htab(package, is_transactional),
 												 key, HASH_ENTER, &found);
 
 	/* Check variable type */
@@ -1472,231 +1444,288 @@ createVariableInternal(HashPackageEntry *package, text *name, Oid typid,
 		 * For each transaction level there should be a corresponding savepoint.
 		 * New value should be stored in a last state.
 		 */
-		if (is_transactional && !isVarChangedInCurrentTrans(variable))
+		if (is_transactional && !isObjectChangedInCurrentTrans(&variable->transObject))
 		{
-			createSavepointVar(package, variable);
+			createSavepointVar(variable);
 		}
 	}
 	else
 	{
-		VarHistoryEntry *historyEntry;
+		VarState *varState;
 
 		/* Variable entry was created, so initialize new variable. */
 		Assert(variable);
 		variable->typid = typid;
+		variable->package = package;
 		variable->is_transactional = is_transactional;
-		dlist_init(&variable->history);
-		historyEntry = MemoryContextAllocZero(pack_hctx(package, is_transactional),
-											  sizeof(VarHistoryEntry));
+		dlist_init(getStateStorage(variable));
+		varState = MemoryContextAllocZero(pack_hctx(package, is_transactional),
+										  sizeof(VarState));
 
-		dlist_push_head(&variable->history, &historyEntry->node);
+		dlist_push_head(getStateStorage(variable), &varState->state.node);
 		if (typid != RECORDOID)
 		{
-			ScalarVar  *scalar = &(historyEntry->value.scalar);
+			ScalarVar  *scalar = &(varState->value.scalar);
 
 			get_typlenbyval(variable->typid, &scalar->typlen,
 							&scalar->typbyval);
-			historyEntry->value.scalar.is_null = true;
+			varState->value.scalar.is_null = true;
 		}
-		historyEntry->is_valid = true;
+		varState->state.is_valid = true;
 	}
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
-		addToChangedVars(package, variable);
+		addToChangedVars(variable);
 
 	return variable;
 }
 
-/*
- * Create a new history point of variable and copy value from
- * previous state
- */
 static void
-createSavepointVar(HashPackageEntry *package, HashVariableEntry *variable)
+copyValue(VarState *src, VarState *dest, Variable *destVar)
 {
+	MemoryContext	oldcxt,
+					destctx;
 
-	if (variable->typid == RECORDOID)
+
+	destctx = destVar->package->hctxTransact;
+	oldcxt = MemoryContextSwitchTo(destctx);
+	if (destVar->typid == RECORDOID)
+	/* copy record value */
 	{
-		insert_savepoint(variable, package->hctxTransact);
+		bool				found;
+		HASH_SEQ_STATUS	   *rstat;
+		HashRecordEntry	   *item_prev,
+						   *item_new;
+		RecordVar		   *record_src = &src->value.record;
+		RecordVar		   *record_dest = &dest->value.record;
+
+		init_record(record_dest, record_src->tupdesc, destVar);
+
+		/* Copy previous history entry into the new one*/
+		rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
+		hash_seq_init(rstat, record_src->rhash);
+		while((item_prev = (HashRecordEntry *) hash_seq_search(rstat)) !=NULL)
+		{
+			HashRecordKey k;
+
+			k = item_prev->key;
+			item_new = (HashRecordEntry *) hash_search(record_dest->rhash, &k,
+													HASH_ENTER, &found);
+			item_new->tuple = heap_copytuple(item_prev->tuple);
+		}
 	}
 	else
+	/* copy scalar value */
 	{
-		ScalarVar  *scalar;
-		ValueHistory *history;
-		VarHistoryEntry *history_entry_new,
-				   *history_entry_prev;
-		MemoryContext oldcxt;
-
-		oldcxt = MemoryContextSwitchTo(package->hctxTransact);
-		history = &variable->history;
-
-		/* Release memory for variable */
-		history_entry_new = palloc0(sizeof(VarHistoryEntry));
-		history_entry_prev = getActualStateOfVar(variable);
-		scalar = &history_entry_new->value.scalar;
-		*scalar = history_entry_prev->value.scalar;
-
+		ScalarVar *scalar = &dest->value.scalar;
+		*scalar = src->value.scalar;
 		if (!scalar->is_null)
-		{
-			scalar->value = datumCopy(history_entry_prev->value.scalar.value,
-									  scalar->typbyval, scalar->typlen);
-		}
+			scalar->value = datumCopy(src->value.scalar.value,
+									scalar->typbyval, scalar->typlen);
 		else
 			scalar->value = 0;
-		history_entry_new->is_valid = history_entry_prev->is_valid;
-		dlist_push_head(history, &history_entry_new->node);
-		MemoryContextSwitchTo(oldcxt);
+	}
+	MemoryContextSwitchTo(oldcxt);
+}
+
+static void
+freeValue(VarState *varstate, Oid typid)
+{
+	if (typid == RECORDOID)
+	{
+		/* All records will be freed */
+		MemoryContextDelete(varstate->value.record.hctx);
+	}
+	else if (varstate->value.scalar.typbyval == false &&
+			 varstate->value.scalar.is_null == false)
+	{
+		pfree(DatumGetPointer(varstate->value.scalar.value));
 	}
 }
 
-/*
- * Remove previous state of variable
- */
 static void
-releaseSavepointVar(HashPackageEntry *package, HashVariableEntry *variable)
+removeState(TransObject *object, TransObjectType type, State *stateToDelete)
 {
-	ValueHistory	  *history;
-	VarHistoryEntry *historyEntry;
-
-	history = &variable->history;
-	if (dlist_has_next(history, dlist_head_node(history)))
+	if (type == VARIABLE)
 	{
-		VarHistoryEntry *historyEntryToDelete;
-		dlist_node *nodeToDelete;
-
-		nodeToDelete = dlist_next_node(history, dlist_head_node(history));
-		historyEntryToDelete = getHistoryEntryOfVar(nodeToDelete);
-
-		if (variable->typid == RECORDOID)
-		{
-			/* All records will be freed */
-			MemoryContextDelete(historyEntryToDelete->value.record.hctx);
-		}
-		else if (historyEntryToDelete->value.scalar.typbyval == false &&
-				 historyEntryToDelete->value.scalar.is_null == false)
-		{
-			pfree(DatumGetPointer(historyEntryToDelete->value.scalar.value));
-		}
-
-		dlist_delete(nodeToDelete);
-		pfree(historyEntryToDelete);
+		Variable *var = getObjectContainer(object, Variable);
+		freeValue(getStateContainer(stateToDelete), var->typid);
 	}
-	/* Change subxact level due to release */
-	historyEntry = getActualStateOfVar(variable);
-	historyEntry->level--;
-	if (!historyEntry->is_valid &&
-		!dlist_has_next(history, dlist_head_node(history)))
-	{
-		bool		found;
-
-		hash_search(package->varHashTransact, variable->name, HASH_REMOVE, &found);
-	}
+	dlist_delete(&stateToDelete->node);
+	pfree(stateToDelete);
 }
 
-/*
- * Rollback variable to previous state and remove current value
- */
 static void
-rollbackSavepointVar(HashPackageEntry *package, HashVariableEntry *variable)
+removeObject(TransObject *object, TransObjectType type)
 {
-	cleanVariableCurrentState(variable);
+	bool	found;
+	HTAB   *hash;
 
-	/* Remove variable if it was created in rolled back transaction */
-	if (dlist_is_empty(&variable->history))
+	if (type == PACKAGE)
 	{
-		bool		found;
-
-		hash_search(package->varHashTransact, variable->name, HASH_REMOVE, &found);
-	}
-}
-
-/*
- * Create a new history point of variable and copy value from
- * previous state
- */
-static void
-createSavepointPack(HashPackageEntry *package)
-{
-	PackHistory		 *history;
-	PackHistoryEntry *history_entry_new,
-					 *history_entry_prev;
-
-	history = &package->history;
-	history_entry_new = MemoryContextAllocZero(ModuleContext, sizeof(PackHistoryEntry));
-	history_entry_prev = getActualStateOfPack(package);
-	history_entry_new->is_valid = history_entry_prev->is_valid;
-	dlist_push_head(history, &history_entry_new->node);
-}
-
-/*
- * Remove previous state of variable
- */
-static void
-releaseSavepointPack(HashPackageEntry *package)
-{
-	PackHistory		 *history;
-	PackHistoryEntry *historyEntry;
-
-	Assert(getActualStateOfPack(package)->level ==
-					GetCurrentTransactionNestLevel());
-	history = &package->history;
-
-	/* Package existed in parent transaction */
-	if (dlist_has_next(history, dlist_head_node(history)))
-	{
-		PackHistoryEntry *historyEntryToDelete;
-		dlist_node *nodeToDelete;
-
-		nodeToDelete = dlist_next_node(history, dlist_head_node(history));
-		historyEntryToDelete = dlist_container(PackHistoryEntry, node, nodeToDelete);
-
-		dlist_delete(nodeToDelete);
-		pfree(historyEntryToDelete);
-	}
-	/* Package has no previous states and can be completely removed if necessary*/
-	if (!getActualStateOfPack(package)->is_valid &&
-		!dlist_has_next(history, dlist_head_node(history)))
-	{
-		bool found;
-		/* Regular variables had already removed */
-		MemoryContextDelete(package->hctxTransact);
-		/* Remove package from packagesHash */
-		hash_search(packagesHash, package->name, HASH_REMOVE, &found);
+		Package *package = getObjectContainer(object, Package);
 		/*
 		 * Delete a variable from the change history of the overlying
 		 * transaction level (head of 'changesStack' at this point)
 		 */
 		if (!dlist_is_empty(changesStack))
 			removeFromChangedVars(package);
+		/* Regular variables had already removed */
+		MemoryContextDelete(package->hctxTransact);
+		hash = packagesHash;
 	}
+	else
+		hash = getObjectContainer(object, Variable)->package->varHashTransact;
 
-	/* Change subxact level due to release */
+	/* Remove all object's states */
+	while(!dlist_is_empty(&object->stateStorage))
+		removeState(object, type, getActualState(object));
+	/* Remove object from hash table */
+	hash_search(hash, object->name, HASH_REMOVE, &found);
+}
+
+/*
+ * Create a new state of object
+ */
+static void
+createSavepoint(TransObject *object, TransObjectType type)
+{
+	StateStorage   *stateStorage;
+	State		   *newState,
+				   *prevState;
+
+	stateStorage = &object->stateStorage;
+	prevState = getActualState(object);
+	if (type==PACKAGE)
+		newState = &((PackState *)MemoryContextAllocZero(ModuleContext,
+													sizeof(PackState)))->state;
 	else
 	{
-		historyEntry = getActualStateOfPack(package);
-		historyEntry->level--;
+		Variable *var = getObjectContainer(object, Variable);
+		newState = &((VarState *)MemoryContextAllocZero(var->package->hctxTransact,
+													sizeof(VarState)))->state;
+		copyValue(getStateContainer(prevState), getStateContainer(newState), var);
+	}
+	dlist_push_head(stateStorage, &newState->node);
+	newState->is_valid = prevState->is_valid;
+}
+
+/*
+ * Wrapper functions for convinient use
+ */
+static inline void
+createSavepointVar(Variable *variable)
+{
+	createSavepoint(&variable->transObject, VARIABLE);
+}
+
+static inline void
+createSavepointPack(Package *package)
+{
+	createSavepoint(&package->transObject, PACKAGE);
+}
+
+/*
+ * Rollback object to its previous state
+ */
+static void
+rollbackSavepoint(TransObject *object, TransObjectType type)
+{
+	Package *package;
+	State *state;
+	state = getActualState(object);
+	if (type == PACKAGE)
+	{
+		if (!state->is_valid)
+		{
+			package = getObjectContainer(object, Package);
+			dlist_pop_head_node(&object->stateStorage);
+			pfree(state);
+			/* Restore regular vars HTAB */
+			makePackHTAB(package, false);
+		}
+	}
+	else
+	{
+		package = getObjectContainer(object, Variable)->package;
+		/* Remove current state */
+		removeState(object, VARIABLE, state);
+
+		/* Remove variable if it was created in rolled back transaction */
+		if (dlist_is_empty(&object->stateStorage))
+			removeObject(object, VARIABLE);
 	}
 }
 
 /*
- * Rollback variable to previous state and remove current value
+ * Remove previous state of object
  */
 static void
-rollbackSavepointPack(HashPackageEntry *package)
+releaseSavepoint(TransObject *object, TransObjectType type)
 {
-	PackHistoryEntry *historyEntryToDelete;
+	StateStorage   *stateStorage;
 
-	historyEntryToDelete = getActualStateOfPack(package);
-	if (historyEntryToDelete->is_valid)
-		releaseSavepointPack(package);
+	Assert(getActualState(object)->level == GetCurrentTransactionNestLevel());
+	stateStorage = &object->stateStorage;
+
+	/* Object existed in parent transaction */
+	if (dlist_has_next(stateStorage, dlist_head_node(stateStorage)))
+	{
+		State *stateToDelete;
+		dlist_node *nodeToDelete;
+
+		/* Remove previous state */
+		nodeToDelete = dlist_next_node(stateStorage, dlist_head_node(stateStorage));
+		stateToDelete = dlist_container(State, node, nodeToDelete);
+		removeState(object, type, stateToDelete);
+	}
+	/* Object has no more previous states and can be completely removed if necessary*/
+	if (!getActualState(object)->is_valid &&
+		!dlist_has_next(stateStorage, dlist_head_node(stateStorage)))
+	{
+		removeObject(object, type);
+	}
+	/* Change subxact level due to release */
 	else
 	{
-		dlist_pop_head_node(&package->history);
-		/* Create regular vars HTAB if it was removed */
-		if (!historyEntryToDelete->is_valid)
-			makePackHTAB(package, false);
-		pfree(historyEntryToDelete);
+		State   *state;
+		state = getActualState(object);
+		state->level--;
 	}
+}
+
+/*
+ * Check if object was changed in current transaction level
+ */
+static bool
+isObjectChangedInCurrentTrans(TransObject *object)
+{
+	State   *state;
+
+	if (!changesStack)
+		return false;
+
+	state = getActualState(object);
+	return state->level == GetCurrentTransactionNestLevel();
+}
+
+/*
+ * Check if object was changed in parent transaction level
+ */
+static bool
+isObjectChangedInUpperTrans(TransObject *object)
+{
+	State  *cur_state,
+		   *prev_state;
+
+	cur_state = getActualState(object);
+	if (dlist_has_next(&object->stateStorage, &cur_state->node))
+	{
+		prev_state = dlist_container(State, node, cur_state->node.next);
+		return prev_state->level == GetCurrentTransactionNestLevel() - 1;
+	}
+
+	return false;
 }
 
 /*
@@ -1758,125 +1787,91 @@ prepareChangesStack(void)
 }
 
 /*
- * Check if object was changed in current transaction level
+ * Initialize an instance of ChangedObject datatype
  */
-#define IS_CHANGED_IN_CURRENT_TEMPLATE(type, argtype) \
-static bool \
-is##type##ChangedInCurrentTrans(argtype *object) \
-{ \
-	type##HistoryEntry *state; \
-	\
-	if (!changesStack) \
-		return false; \
-	\
-	state = getActualStateOf##type(object); \
-	return state->level == GetCurrentTransactionNestLevel(); \
+static inline ChangedObject *
+makeChangedObject(TransObject *object, MemoryContext ctx)
+{
+	ChangedObject *co;
+
+	co = MemoryContextAllocZero(ctx, sizeof(ChangedObject));
+	co->object = object;
+	return co;
 }
 
 /*
- * Check if object was changed in parent transaction level
+ * Add an object to the list of created, removed, or changed objects
+ * in current transaction level
  */
-#define IS_CHANGED_IN_UPPER_TRANS_TEMPLATE(type, argtype) \
-static bool \
-is##type##ChangedInUpperTrans(argtype *object) \
-{ \
-	type##HistoryEntry  *state, \
-						*prev_state; \
-	\
-	state = getActualStateOf##type(object); \
-	if (dlist_has_next(&object->history, &state->node))\
-	{ \
-		prev_state = getHistoryEntryOf##type(state->node.next); \
-		return prev_state->level == GetCurrentTransactionNestLevel() - 1; \
-	} \
-	return false; \
+static void
+addToChangesStack(TransObject *object, TransObjectType type)
+{
+	prepareChangesStack();
+	if (!isObjectChangedInCurrentTrans(object))
+	{
+		ChangesStackNode *csn;
+		ChangedObject *co;
+
+		csn = get_actual_changes_list();
+		co = makeChangedObject(object, csn->ctx);
+		dlist_push_head(type == PACKAGE ? csn->changedPacksList :
+										  csn->changedVarsList, &co->node);
+
+		/* Give this object current subxact level */
+		getActualState(object)->level = GetCurrentTransactionNestLevel();
+	}
 }
+
 
 /*
- * Initialize an instance of Changed(Pack|Var)Node datatype
+ * Wrapper functions for convinient use
  */
-#define MAKE_CHANGES_NODE_TEMPLATE(type) \
-static inline Changed##type##sNode * \
-makeChanged##type##sNode(MemoryContext ctx, HashPackageEntry *package FUNC_ARG) \
-{ \
-	Changed##type##sNode *list_node; \
-	\
-	list_node = MemoryContextAllocZero(ctx, sizeof(Changed##type##sNode)); \
-	list_node->package = package; \
-	ASSIGN_VAR \
-	return list_node; \
+static inline void
+addToChangedPacks(Package *package)
+{
+	addToChangesStack(&package->transObject, PACKAGE);
 }
 
-/*
- * Add an object to list of created or removed packs in current transaction level
- */
-#define ADD_TO_CHANGES_TEMPLATE(type, object) \
-static void \
-addToChanged##type##s(HashPackageEntry *package FUNC_ARG) \
-{ \
-	prepareChangesStack(); \
-	if (!is##type##ChangedInCurrentTrans(object)) \
-	{ \
-		ChangesStackNode *csn; \
-		Changed##type##sNode *list_node; \
-		\
-		csn = get_actual_changes_list(); \
-		list_node = makeChanged##type##sNode(csn->ctx, package MAKE_ARG); \
-		dlist_push_head(csn->changed##type##sList, &list_node->node); \
-		\
-		getActualStateOf##type(list_node->object)->level = \
-											GetCurrentTransactionNestLevel(); \
-	} \
+static inline void
+addToChangedVars(Variable *variable)
+{
+	addToChangesStack(&variable->transObject, VARIABLE);
 }
-
-/* Functions to process changes history of packages */
-#define FUNC_ARG
-#define ASSIGN_VAR
-#define MAKE_ARG
-MAKE_CHANGES_NODE_TEMPLATE(Pack)
-ADD_TO_CHANGES_TEMPLATE(Pack, package)
-IS_CHANGED_IN_UPPER_TRANS_TEMPLATE(Pack, HashPackageEntry)
-IS_CHANGED_IN_CURRENT_TEMPLATE(Pack, HashPackageEntry)
-#undef FUNC_ARG
-#undef ASSIGN_VAR
-#undef MAKE_ARG
-
-/* Functions to process changes history of variables */
-#define FUNC_ARG , HashVariableEntry *variable
-#define ASSIGN_VAR list_node->variable = variable;
-#define MAKE_ARG , variable
-MAKE_CHANGES_NODE_TEMPLATE(Var)
-ADD_TO_CHANGES_TEMPLATE(Var, variable)
-IS_CHANGED_IN_UPPER_TRANS_TEMPLATE(Var, HashVariableEntry)
-IS_CHANGED_IN_CURRENT_TEMPLATE(Var, HashVariableEntry)
-#undef FUNC_ARG
-#undef ASSIGN_VAR
-#undef MAKE_ARG
 
 /*
  * Remove from the changes list a deleted package
  */
 static void
-removeFromChangedVars(HashPackageEntry *package)
+removeFromChangedVars(Package *package)
 {
-#define REMOVE(type) \
-	{ \
-		dlist_mutable_iter	miter##type; \
-		dlist_head		   *changed##type##List; \
-		changed##type##List = get_actual_changes_list()->changed##type##List; \
-		dlist_foreach_modify(miter##type, changed##type##List) \
-		{ \
-			Changed##type##Node *list_node = \
-				dlist_container(Changed##type##Node, node, miter##type.cur); \
-			if (list_node->package == package) \
-				dlist_delete(&list_node->node); \
-		} \
+	dlist_mutable_iter	var_miter,
+						pack_miter;
+	dlist_head		   *changedVarsList,
+					   *changedPacksList;
+
+	/* First remove corresponding variables from changedVarsList */
+	changedVarsList = get_actual_changes_list()->changedVarsList;
+	dlist_foreach_modify(var_miter, changedVarsList)
+	{
+		ChangedObject *co_cur = dlist_container(ChangedObject, node,
+													var_miter.cur);
+		Variable *var = getObjectContainer(co_cur->object, Variable);
+		if (var->package == package)
+			dlist_delete(&co_cur->node);
 	}
-
-	REMOVE(Vars);
-	REMOVE(Packs);
-
-#undef REMOVE
+	/* Now remove package itself from changedPacksList */
+	changedPacksList = get_actual_changes_list()->changedPacksList;
+	dlist_foreach_modify(pack_miter, changedPacksList)
+	{
+		ChangedObject *co_cur = dlist_container(ChangedObject, node,
+													pack_miter.cur);
+		Package *pack = getObjectContainer(co_cur->object, Package);
+		if (pack == package)
+		{
+			dlist_delete(&co_cur->node);
+			break;
+		}
+	}
 }
 
 /*
@@ -1897,102 +1892,74 @@ static void
 processChanges(Action action)
 {
 
-	ChangesStackNode   *bottom_list;
-	dlist_iter			var_iter,
-						pack_iter;
+	ChangesStackNode *bottom_list;
+	int i;
 
 	Assert(changesStack && changesStackContext);
 	/* List removed from stack but we still can use it */
 	bottom_list = dlist_container(ChangesStackNode, node,
 									dlist_pop_head_node(changesStack));
 
-	/* Proceed variables first */
-	dlist_foreach(var_iter, bottom_list->changedVarsList)
+	/* i:
+	 * 1 - manage variables
+	 * 0 - manage packages
+	 */
+	for (i = 1; i > -1; i--)
 	{
-		ChangedVarsNode *cvn_cur = dlist_container(ChangedVarsNode, node, var_iter.cur);
-
-		switch (action)
+		dlist_iter iter;
+		dlist_foreach(iter, i ? bottom_list->changedVarsList :
+								bottom_list->changedPacksList)
 		{
-			case ROLLBACK_TO_SAVEPOINT:
-				rollbackSavepointVar(cvn_cur->package, cvn_cur->variable);
-				break;
-			case RELEASE_SAVEPOINT:
-				/*
-				 * If package was removed in current transaction level
-				 * mark var as removed.
-				 * We do not check pack_state->level, because var cannot get in
-				 * list of changes until pack is removed.
-				 */
-				if (!getActualStateOfPack(cvn_cur->package)->is_valid)
-					getActualStateOfVar(cvn_cur->variable)->is_valid = false;
+			ChangedObject *co = dlist_container(ChangedObject, node, iter.cur);
+			TransObject *object = co->object;
 
-				/* Did this variable change at parent level? */
-				if (dlist_is_empty(changesStack) ||
-					isVarChangedInUpperTrans(cvn_cur->variable))
-				{
-					/* We just have to drop previous state */
-					releaseSavepointVar(cvn_cur->package, cvn_cur->variable);
-				}
-				else
-				{
-					ChangedVarsNode *cvn_new;
-					ChangesStackNode *csn;
-
-					/*
-					 * Impossible to push in upper list existing node because
-					 * it was created in another context
-					 */
-					csn = dlist_head_element(ChangesStackNode, node, changesStack);
-					cvn_new = makeChangedVarsNode(csn->ctx, cvn_cur->package,
-															cvn_cur->variable);
-					dlist_push_head(csn->changedVarsList, &cvn_new->node);
-
-					/* Change subxact level due to release */
-					getActualStateOfVar(cvn_new->variable)->level--;
-				}
-				break;
-		}
-	}
-
-	/* Proceed packages */
-	dlist_foreach(pack_iter, bottom_list->changedPacksList)
-	{
-		ChangedPacksNode *cpn_cur = dlist_container(ChangedPacksNode, node,
-													pack_iter.cur);
-
-		switch (action)
-		{
-			case ROLLBACK_TO_SAVEPOINT:
-				if (!getActualStateOfPack(cpn_cur->package)->is_valid)
-				{
-					rollbackSavepointPack(cpn_cur->package);
+			switch (action)
+			{
+				case ROLLBACK_TO_SAVEPOINT:
+					rollbackSavepoint(object, i ? VARIABLE : PACKAGE);
 					break;
-				}
-			case RELEASE_SAVEPOINT:
-				/* Did this package change at parent level? */
-				if (dlist_is_empty(changesStack) ||
-					isPackChangedInUpperTrans(cpn_cur->package))
-				{
-					/* We just have to drop previous state */
-					releaseSavepointPack(cpn_cur->package);
-				}
-				else
-				{
-					ChangedPacksNode *cpn_new;
-					ChangesStackNode *csn;
-
+				case RELEASE_SAVEPOINT:
 					/*
-					 * Impossible to push in upper list existing node because
-					 * it was created in another context
-					 */
-					csn = dlist_head_element(ChangesStackNode, node, changesStack);
-					cpn_new = makeChangedPacksNode(csn->ctx, cpn_cur->package);
-					dlist_push_head(csn->changedPacksList, &cpn_new->node);
+					* If package was removed in current transaction level
+					* mark var as removed.
+					* We do not check pack_state->level, because var cannot get in
+					* list of changes until pack is removed.
+					*/
+					if (i)
+					{
+						Variable *variable = getObjectContainer(object, Variable);
+						Package *package = variable->package;
+						if (!getActualStateOfContainer(package)->is_valid)
+							getActualState(object)->is_valid = false;
+					}
 
-					/* Change subxact level due to release */
-					getActualStateOfPack(cpn_new->package)->level--;
-				}
-				break;
+					/* Did this object change at parent level? */
+					if (dlist_is_empty(changesStack) ||
+						isObjectChangedInUpperTrans(object))
+					{
+						/* We just have to drop previous state */
+						releaseSavepoint(object, i ? VARIABLE : PACKAGE);
+					}
+					else
+					{
+						/* Mark object as changed at parent level */
+						ChangedObject *co_new;
+						ChangesStackNode *csn;
+
+						/*
+						* Impossible to push in upper list existing node because
+						* it was created in another context
+						*/
+						csn = dlist_head_element(ChangesStackNode, node, changesStack);
+						co_new = makeChangedObject(object, csn->ctx);
+						dlist_push_head(i ? csn->changedVarsList :
+											csn->changedPacksList, &co_new->node);
+
+						/* Change subxact level due to release */
+						getActualState(object)->level--;
+					}
+					break;
+			}
 		}
 	}
 
