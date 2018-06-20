@@ -451,3 +451,12 @@ SELECT package FROM pgv_stats();
 SELECT * FROM pgv_list() ORDER BY package, name;
 COMMIT;
 SELECT package FROM pgv_stats();
+
+BEGIN;
+SELECT pgv_set('vars', 'trans1', 'package created'::text, true);
+SELECT pgv_remove('vars');
+SELECT * FROM pgv_list() ORDER BY package, name;
+SELECT pgv_set('vars', 'trans1', 'package restored'::text, true);
+SELECT * FROM pgv_list() ORDER BY package, name;
+COMMIT;
+SELECT pgv_remove('vars');

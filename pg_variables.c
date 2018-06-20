@@ -1471,8 +1471,8 @@ createVariableInternal(Package *package, text *name, Oid typid,
 							&scalar->typbyval);
 			varState->value.scalar.is_null = true;
 		}
-		varState->state.is_valid = true;
 	}
+	getActualStateOfContainer(variable)->is_valid = true;
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
 		addToChangedVars(variable);
