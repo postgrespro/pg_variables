@@ -325,8 +325,8 @@ variable_insert(PG_FUNCTION_ARGS)
 
 	/* Get cached variable */
 	if (LastVariable == NULL ||
-		VARSIZE_ANY_EXHDR(var_name) != strlen(getName(LastPackage)) ||
-		strncmp(VARDATA_ANY(var_name), getName(LastPackage),
+		VARSIZE_ANY_EXHDR(var_name) != strlen(getName(LastVariable)) ||
+		strncmp(VARDATA_ANY(var_name), getName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
 		variable = createVariableInternal(package, var_name, RECORDOID,
