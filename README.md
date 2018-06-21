@@ -304,8 +304,8 @@ SELECT pgv_get('pack', 'var_text', NULL::text);
  before transaction block
 ```
 
-If you create variable after `BEGIN` or `SAVEPOINT` statements and than rollback
-to previous state - variable will not be exist:
+If you create a transactional variable after `BEGIN` or `SAVEPOINT` statements 
+and then rollback to previous state - variable will not be exist:
 
 ```sql
 BEGIN;
@@ -324,15 +324,33 @@ ERROR:  unrecognized variable "var_int"
 COMMIT;
 ```
 
-Also you cannot undo removing variable by `ROLLBACK`:
+You can undo removal of a transactional variable by `ROLLBACK`, but if you remove
+a whole package, all regular variables will be removed permanently:
 
 ```sql
-SELECT pgv_set('pack', 'var_int', 122, true);
+SELECT pgv_set('pack', 'var_reg', 123);
+SELECT pgv_set('pack', 'var_trans', 456, true);
 BEGIN;
 SELECT pgv_free();
+SELECT * FROM pgv_list();
+ package | name | is_transactional
+---------+------+------------------
+(0 rows)
+
+-- Memory is allocated yet
+SELECT * FROM pgv_stats();
+ package | allocated_memory
+---------+------------------
+ pack    |            24576
+(1 row)
+
 ROLLBACK;
-SELECT pgv_get('pack', 'var_int', NULL::int);
-ERROR:  unrecognized package "pack"
+SELECT * FROM pgv_list();
+ package |   name    | is_transactional
+---------+-----------+------------------
+ pack    | var_trans | t
+(1 row)
+
 ```
 
 If you created transactional variable once, you should use flag `is_transactional`

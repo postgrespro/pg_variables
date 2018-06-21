@@ -32,14 +32,6 @@
 #define NUMPACKAGES 8
 #define NUMVARIABLES 16
 
-typedef struct HashPackageEntry
-{
-	char		name[NAMEDATALEN];
-	HTAB	   *variablesHash;
-	/* Memory context for package variables for easy memory release */
-	MemoryContext hctx;
-} HashPackageEntry;
-
 typedef struct RecordVar
 {
 	HTAB	   *rhash;
@@ -60,33 +52,61 @@ typedef struct ScalarVar
 	int16		typlen;
 } ScalarVar;
 
-/* List node that stores one of the variables states */
-typedef struct ValueHistoryEntry{
+/* State of TransObject instance */
+typedef struct TransState
+{
 	dlist_node	node;
+	bool		is_valid;
+	int			level;
+} TransState;
+
+/* List node that stores one of the package's states */
+typedef struct PackState
+{
+	TransState	state;
+} PackState;
+
+/* List node that stores one of the variable's states */
+typedef struct VarState
+{
+	TransState	state;
 	union
 	{
 		ScalarVar scalar;
 		RecordVar record;
 	}		value;
-	/* Transaction nest level of current entry */
-	int level;
-} ValueHistoryEntry;
+} VarState;
 
-typedef dlist_head ValueHistory;
-
-/* Variable by itself */
-typedef struct HashVariableEntry
+/* Transactional object */
+typedef struct TransObject
 {
 	char		name[NAMEDATALEN];
-	/* Entry point to list with states of value */
-	ValueHistory data;
+	dlist_head	states;
+} TransObject;
+
+/* Transactional package */
+typedef struct Package
+{
+	TransObject transObject;
+	HTAB	   *varHashRegular,
+			   *varHashTransact;
+	/* Memory context for package variables for easy memory release */
+	MemoryContext hctxRegular,
+				  hctxTransact;
+} Package;
+
+/* Transactional variable */
+typedef struct Variable
+{
+	TransObject	transObject;
+	Package	   *package;
 	Oid			typid;
 	/*
 	 * The flag determines the further behavior of the variable.
 	 * Can be specified only when creating a variable.
 	 */
 	bool		is_transactional;
-} HashVariableEntry;
+} Variable;
 
 typedef struct HashRecordKey
 {
@@ -104,46 +124,52 @@ typedef struct HashRecordEntry
 	HeapTuple	tuple;
 } HashRecordEntry;
 
-/* Element of list with variables, changed within transaction */
-typedef struct ChangedVarsNode
+/* Element of list with objects created, changed or removed within transaction */
+typedef struct ChangedObject
 {
-	dlist_node	node;
-	HashPackageEntry *package;
-	HashVariableEntry *variable;
-} ChangedVarsNode;
+	dlist_node		node;
+	TransObject	   *object;
+} ChangedObject;
 
-/* Element of stack with 'changedVars' list heads*/
-typedef struct ChangedVarsStackNode
+/* Type of transactional object instance */
+typedef enum TransObjectType
+{
+	TRANS_PACKAGE,
+	TRANS_VARIABLE
+} TransObjectType;
+
+/* Element of stack with 'changedVars' and 'changedPacks' list heads*/
+typedef struct ChangesStackNode
 {
 	dlist_node	node;
-	dlist_head  *changedVarsList;
+	dlist_head *changedVarsList;
+	dlist_head *changedPacksList;
 	MemoryContext ctx;
-} ChangedVarsStackNode;
+} ChangesStackNode;
 
-extern void init_attributes(HashVariableEntry* variable, TupleDesc tupdesc,
-							MemoryContext topctx);
-extern void check_attributes(HashVariableEntry *variable, TupleDesc tupdesc);
-extern void check_record_key(HashVariableEntry *variable, Oid typid);
+extern void init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable);
+extern void check_attributes(Variable *variable, TupleDesc tupdesc);
+extern void check_record_key(Variable *variable, Oid typid);
 
-extern void insert_record(HashVariableEntry* variable,
+extern void insert_record(Variable* variable,
 						  HeapTupleHeader tupleHeader);
-extern bool update_record(HashVariableEntry *variable,
+extern bool update_record(Variable *variable,
 						  HeapTupleHeader tupleHeader);
-extern bool delete_record(HashVariableEntry* variable, Datum value,
+extern bool delete_record(Variable* variable, Datum value,
 						  bool is_null);
-extern void clean_records(HashVariableEntry *variable);
 
-extern void insert_savepoint(HashVariableEntry *variable,
-							MemoryContext packageContext);
+#define GetActualState(object) \
+	(dlist_head_element(TransState, node, &((TransObject *) object)->states))
 
-/* Internal macros to manage with dlist structure */
-#define get_actual_value_scalar(variable) \
-	(&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.scalar))
-#define get_actual_value_record(variable) \
-	(&((dlist_head_element(ValueHistoryEntry, node, &variable->data))->value.record))
-#define get_actual_value(variable) \
-	(dlist_head_element(ValueHistoryEntry, node, &variable->data))
-#define get_history_entry(node_ptr) \
-	dlist_container(ValueHistoryEntry, node, node_ptr)
+#define GetActualValue(variable) \
+	(((VarState *) GetActualState(variable))->value)
+
+#define GetName(object) \
+	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
+	 object->transObject.name)
+
+#define GetStateStorage(object) \
+	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
+	 &(object->transObject.states))
 
 #endif   /* __PG_VARIABLES_H__ */

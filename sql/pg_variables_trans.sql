@@ -339,7 +339,7 @@ SELECT pgv_get('vars2', 'any1',NULL::text);
 
 SELECT pgv_free();
 
---Additional tests
+-- Additional tests
 SELECT pgv_insert('vars3', 'r1', tab, true) FROM tab;
 BEGIN;
 SELECT pgv_insert('vars3', 'r1', row(5 :: integer, 'before savepoint sp1' :: varchar),true);
@@ -393,3 +393,70 @@ SELECT pgv_get('vars', 'any1',NULL::text);
 BEGIN;
 SELECT pgv_set('vars', 'any1', 'wrong type'::varchar, true);
 COMMIT;
+
+-- THE REMOVAL OF THE VARIABLE MUST BE CANCELED ON ROLLBACK
+SELECT pgv_set('vars', 'any1', 'variable exists'::text, true);
+BEGIN;
+SELECT pgv_remove('vars', 'any1');
+SELECT pgv_exists('vars', 'any1');
+ROLLBACK;
+SELECT pgv_exists('vars', 'any1');
+SELECT pgv_get('vars', 'any1',NULL::text);
+
+BEGIN;
+SELECT pgv_remove('vars', 'any1');
+SELECT pgv_exists('vars', 'any1');
+COMMIT;
+SELECT pgv_exists('vars', 'any1');
+SELECT pgv_get('vars', 'any1',NULL::text);
+
+SELECT * FROM pgv_list() ORDER BY package, name;
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+SELECT * FROM pgv_list() ORDER BY package, name;
+
+BEGIN;
+SELECT pgv_free();
+COMMIT;
+SELECT * FROM pgv_list() ORDER BY package, name;
+
+SELECT pgv_set('vars', 'regular', 'regular variable exists'::text);
+SELECT pgv_set('vars', 'trans1', 'trans1 variable exists'::text, true);
+BEGIN;
+SELECT pgv_free();
+SELECT * FROM pgv_list() ORDER BY package, name;
+SELECT pgv_set('vars', 'trans2', 'trans2 variable exists'::text, true);
+SELECT * FROM pgv_list() ORDER BY package, name;
+SELECT pgv_remove('vars');
+SELECT * FROM pgv_list() ORDER BY package, name;
+ROLLBACK;
+SELECT * FROM pgv_list() ORDER BY package, name;
+
+BEGIN;
+SAVEPOINT sp1;
+SAVEPOINT sp2;
+SAVEPOINT sp3;
+SELECT pgv_set('vars2', 'trans2', 'trans2 variable exists'::text, true);
+SAVEPOINT sp4;
+SAVEPOINT sp5;
+SELECT pgv_free();
+SELECT package FROM pgv_stats();
+SELECT * FROM pgv_list() ORDER BY package, name;
+RELEASE sp5;
+SELECT package FROM pgv_stats();
+SELECT * FROM pgv_list() ORDER BY package, name;
+RELEASE sp4;
+SELECT package FROM pgv_stats();
+SELECT * FROM pgv_list() ORDER BY package, name;
+COMMIT;
+SELECT package FROM pgv_stats();
+
+BEGIN;
+SELECT pgv_set('vars', 'trans1', 'package created'::text, true);
+SELECT pgv_remove('vars');
+SELECT * FROM pgv_list() ORDER BY package, name;
+SELECT pgv_set('vars', 'trans1', 'package restored'::text, true);
+SELECT * FROM pgv_list() ORDER BY package, name;
+COMMIT;
+SELECT pgv_remove('vars');
