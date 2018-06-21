@@ -75,7 +75,7 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 
 	Assert(variable->typid == RECORDOID);
 
-	sprintf(hash_name, "Records hash for variable \"%s\"", getName(variable));
+	sprintf(hash_name, "Records hash for variable \"%s\"", GetName(variable));
 
 	topctx = variable->is_transactional ? 
 			 variable->package->hctxTransact :
@@ -144,13 +144,13 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = getActualValueRecord(variable);
+	record = &(GetActualValue(variable).record);
 	/* First, check columns count. */
 	if (record->tupdesc->natts != tupdesc->natts)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("new record structure differs from variable \"%s\" "
-						"structure", getName(variable))));
+						"structure", GetName(variable))));
 
 	/* Second, check columns type. */
 	for (i = 0; i < tupdesc->natts; i++)
@@ -164,7 +164,7 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 			ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("new record structure differs from variable \"%s\" "
-						"structure", getName(variable))));
+						"structure", GetName(variable))));
 	}
 }
 
@@ -177,13 +177,13 @@ check_record_key(Variable *variable, Oid typid)
 	RecordVar  *record;
 
 	Assert(variable->typid == RECORDOID);
-	record = getActualValueRecord(variable);
+	record = &(GetActualValue(variable).record);
 
 	if (GetTupleDescAttr(record->tupdesc, 0)->atttypid != typid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("requested value type differs from variable \"%s\" "
-						"key type", getName(variable))));
+						"key type", GetName(variable))));
 }
 
 /*
@@ -205,7 +205,7 @@ insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = getActualValueRecord(variable);
+	record = &(GetActualValue(variable).record);
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
@@ -238,7 +238,7 @@ insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("there is a record in the variable \"%s\" with same "
-						"key", getName(variable))));
+						"key", GetName(variable))));
 	}
 	/* Second, insert a new record */
 	item->tuple = tuple;
@@ -265,7 +265,7 @@ update_record(Variable* variable, HeapTupleHeader tupleHeader)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = getActualValueRecord(variable);
+	record = &(GetActualValue(variable).record);
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
@@ -315,7 +315,7 @@ delete_record(Variable *variable, Datum value, bool is_null)
 
 	Assert(variable->typid == RECORDOID);
 
-	record = getActualValueRecord(variable);
+	record = &(GetActualValue(variable).record);
 
 	/* Delete a record */
 	k.value = value;

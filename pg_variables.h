@@ -53,22 +53,23 @@ typedef struct ScalarVar
 } ScalarVar;
 
 /* State of TransObject instance */
-typedef struct State
+typedef struct TransState
 {
-    dlist_node	node;
-    bool		is_valid;
-    int			level;
-} State;
+	dlist_node	node;
+	bool		is_valid;
+	int			level;
+} TransState;
 
 /* List node that stores one of the package's states */
 typedef struct PackState
 {
-	State		state;
+	TransState	state;
 } PackState;
 
 /* List node that stores one of the variable's states */
-typedef struct VarState{
-	State 		state;
+typedef struct VarState
+{
+	TransState	state;
 	union
 	{
 		ScalarVar scalar;
@@ -76,13 +77,11 @@ typedef struct VarState{
 	}		value;
 } VarState;
 
-typedef dlist_head StateStorage;
-
 /* Transactional object */
 typedef struct TransObject
 {
-	char			name[NAMEDATALEN];
-	StateStorage	stateStorage;
+	char		name[NAMEDATALEN];
+	dlist_head	states;
 } TransObject;
 
 /* Transactional package */
@@ -135,8 +134,8 @@ typedef struct ChangedObject
 /* Type of transactional object instance */
 typedef enum TransObjectType
 {
-	PACKAGE,
-	VARIABLE
+	TOP_PACKAGE,
+	TOP_VARIABLE
 } TransObjectType;
 
 /* Element of stack with 'changedVars' and 'changedPacks' list heads*/
@@ -159,41 +158,18 @@ extern bool update_record(Variable *variable,
 extern bool delete_record(Variable* variable, Datum value,
 						  bool is_null);
 
-/* Internal getters */
-/* pack-var */
-#define getActualStateOfContainer(object) \
-	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
-	 (dlist_head_element(State, node, &(object->transObject.stateStorage))))
+#define GetActualState(object) \
+	(dlist_head_element(TransState, node, &((TransObject *) object)->states))
 
-#define getActualValueScalar(variable) \
-	(AssertVariableIsOfTypeMacro(*variable, Variable), \
-	 &(((VarState *) getActualStateOfContainer(variable) - \
-									offsetof(VarState, state))->value.scalar))
+#define GetActualValue(variable) \
+	(((VarState *) GetActualState(variable))->value)
 
-#define getActualValueRecord(variable) \
-	(AssertVariableIsOfTypeMacro(*variable, Variable), \
-	 &(((VarState *) getActualStateOfContainer(variable) - \
-									offsetof(VarState, state))->value.record))
-
-#define getName(object) \
+#define GetName(object) \
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
 	 object->transObject.name)
 
-#define getStateStorage(object) \
+#define GetStateStorage(object) \
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
-	 &(object->transObject.stateStorage))
-
-/* State */
-#define getStateContainer(state_ptr) \
-	((VarState *) state_ptr - offsetof(VarState, state))
-
-/* TransObject */
-#define getObjectContainer(object_ptr, type) \
-	(AssertVariableIsOfTypeMacro(object_ptr, TransObject *), \
-	(type *) object_ptr - offsetof(type, transObject))
-
-#define getActualState(transObject) \
-	(AssertVariableIsOfTypeMacro(transObject, TransObject *), \
-	(dlist_head_element(State, node, &(transObject->stateStorage))))
+	 &(object->transObject.states))
 
 #endif   /* __PG_VARIABLES_H__ */
