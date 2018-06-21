@@ -350,8 +350,8 @@ variable_insert(PG_FUNCTION_ARGS)
 		if (variable->is_transactional &&
 			!isObjectChangedInCurrentTrans(transObj))
 		{
-			createSavepoint(transObj, TOP_VARIABLE);
-			addToChangesStack(transObj, TOP_VARIABLE);
+			createSavepoint(transObj, TRANS_VARIABLE);
+			addToChangesStack(transObj, TRANS_VARIABLE);
 		}
 	}
 
@@ -438,8 +438,8 @@ variable_update(PG_FUNCTION_ARGS)
 	if (variable->is_transactional &&
 		!isObjectChangedInCurrentTrans(transObject))
 	{
-		createSavepoint(transObject, TOP_VARIABLE);
-		addToChangesStack(transObject, TOP_VARIABLE);
+		createSavepoint(transObject, TRANS_VARIABLE);
+		addToChangesStack(transObject, TRANS_VARIABLE);
 	}
 
 	/* Update a record */
@@ -518,8 +518,8 @@ variable_delete(PG_FUNCTION_ARGS)
 	if (variable->is_transactional &&
 		!isObjectChangedInCurrentTrans(transObject))
 	{
-		createSavepoint(transObject, TOP_VARIABLE);
-		addToChangesStack(transObject, TOP_VARIABLE);
+		createSavepoint(transObject, TRANS_VARIABLE);
+		addToChangesStack(transObject, TRANS_VARIABLE);
 	}
 
 	/* Delete a record */
@@ -841,7 +841,7 @@ remove_variable(PG_FUNCTION_ARGS)
 	if (found)
 	{
 		/* Regular variable */
-		removeState(&variable->transObject, TOP_VARIABLE,
+		removeState(&variable->transObject, TRANS_VARIABLE,
 					GetActualState(variable));
 	}
 	else
@@ -859,8 +859,8 @@ remove_variable(PG_FUNCTION_ARGS)
 		transObject = &variable->transObject;
 		if (!isObjectChangedInCurrentTrans(transObject))
 		{
-			createSavepoint(transObject, TOP_VARIABLE);
-			addToChangesStack(transObject, TOP_VARIABLE);
+			createSavepoint(transObject, TRANS_VARIABLE);
+			addToChangesStack(transObject, TRANS_VARIABLE);
 		}
 		GetActualState(variable)->is_valid = false;
 	}
@@ -922,8 +922,8 @@ removePackageInternal(Package *package)
 	transObject = &package->transObject;
 	if (!isObjectChangedInCurrentTrans(transObject))
 	{
-		createSavepoint(transObject, TOP_PACKAGE);
-		addToChangesStack(transObject, TOP_PACKAGE);
+		createSavepoint(transObject, TRANS_PACKAGE);
+		addToChangesStack(transObject, TRANS_PACKAGE);
 	}
 	GetActualState(package)->is_valid = false;
 }
@@ -1315,8 +1315,8 @@ getPackageByName(text* name, bool create, bool strict)
 			/* Make new history entry of package */
 			if (!isObjectChangedInCurrentTrans(transObj))
 			{
-				createSavepoint(transObj, TOP_PACKAGE);
-				addToChangesStack(transObj, TOP_PACKAGE);
+				createSavepoint(transObj, TRANS_PACKAGE);
+				addToChangesStack(transObj, TRANS_PACKAGE);
 			}
 
 			GetActualState(package)->is_valid = true;
@@ -1335,8 +1335,8 @@ getPackageByName(text* name, bool create, bool strict)
 
 				if (!isObjectChangedInCurrentTrans(transObj))
 				{
-					createSavepoint(transObj, TOP_VARIABLE);
-					addToChangesStack(transObj, TOP_VARIABLE);
+					createSavepoint(transObj, TRANS_VARIABLE);
+					addToChangesStack(transObj, TRANS_VARIABLE);
 				}
 				GetActualState(variable)->is_valid = false;
 			}
@@ -1375,7 +1375,7 @@ getPackageByName(text* name, bool create, bool strict)
 		packState->state.is_valid = true;
 
 		/* Add to changes list */
-		addToChangesStack(&package->transObject, TOP_PACKAGE);
+		addToChangesStack(&package->transObject, TRANS_PACKAGE);
 
 		return package;
 	}
@@ -1487,7 +1487,7 @@ createVariableInternal(Package *package, text *name, Oid typid,
 		if (is_transactional &&
 			!isObjectChangedInCurrentTrans(transObject))
 		{
-			createSavepoint(transObject, TOP_VARIABLE);
+			createSavepoint(transObject, TRANS_VARIABLE);
 		}
 	}
 	else
@@ -1517,7 +1517,7 @@ createVariableInternal(Package *package, text *name, Oid typid,
 	GetActualState(variable)->is_valid = true;
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
-		addToChangesStack(transObject, TOP_VARIABLE);
+		addToChangesStack(transObject, TRANS_VARIABLE);
 
 	return variable;
 }
@@ -1589,7 +1589,7 @@ freeValue(VarState *varstate, Oid typid)
 static void
 removeState(TransObject *object, TransObjectType type, TransState *stateToDelete)
 {
-	if (type == TOP_VARIABLE)
+	if (type == TRANS_VARIABLE)
 	{
 		Variable *var = (Variable *) object;
 		freeValue((VarState *) stateToDelete, var->typid);
@@ -1604,7 +1604,7 @@ removeObject(TransObject *object, TransObjectType type)
 	bool	found;
 	HTAB   *hash;
 
-	if (type == TOP_PACKAGE)
+	if (type == TRANS_PACKAGE)
 	{
 		Package *package = (Package *) object;
 
@@ -1639,7 +1639,7 @@ createSavepoint(TransObject *transObj, TransObjectType type)
 				   *prevState;
 
 	prevState = GetActualState(transObj);
-	if (type==TOP_PACKAGE)
+	if (type==TRANS_PACKAGE)
 		newState = (TransState *) MemoryContextAllocZero(ModuleContext,
 													sizeof(PackState));
 	else
@@ -1663,7 +1663,7 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	TransState *state;
 
 	state = GetActualState(object);
-	if (type == TOP_PACKAGE)
+	if (type == TRANS_PACKAGE)
 	{
 		if (!state->is_valid)
 		{
@@ -1676,11 +1676,11 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	else
 	{
 		/* Remove current state */
-		removeState(object, TOP_VARIABLE, state);
+		removeState(object, TRANS_VARIABLE, state);
 
 		/* Remove variable if it was created in rolled back transaction */
 		if (dlist_is_empty(&object->states))
-			removeObject(object, TOP_VARIABLE);
+			removeObject(object, TRANS_VARIABLE);
 	}
 }
 
@@ -1843,7 +1843,7 @@ addToChangesStack(TransObject *transObj, TransObjectType type)
 
 		csn = get_actual_changes_list();
 		co = makeChangedObject(transObj, csn->ctx);
-		dlist_push_head(type == TOP_PACKAGE ? csn->changedPacksList :
+		dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
 											  csn->changedVarsList, &co->node);
 
 		/* Give this object current subxact level */
@@ -1928,7 +1928,7 @@ processChanges(Action action)
 			switch (action)
 			{
 				case ROLLBACK_TO_SAVEPOINT:
-					rollbackSavepoint(object, i ? TOP_VARIABLE : TOP_PACKAGE);
+					rollbackSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
 					break;
 				case RELEASE_SAVEPOINT:
 					/*
@@ -1951,7 +1951,7 @@ processChanges(Action action)
 						isObjectChangedInUpperTrans(object))
 					{
 						/* We just have to drop previous state */
-						releaseSavepoint(object, i ? TOP_VARIABLE : TOP_PACKAGE);
+						releaseSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
 					}
 					else
 					{

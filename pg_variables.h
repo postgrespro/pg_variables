@@ -134,8 +134,8 @@ typedef struct ChangedObject
 /* Type of transactional object instance */
 typedef enum TransObjectType
 {
-	TOP_PACKAGE,
-	TOP_VARIABLE
+	TRANS_PACKAGE,
+	TRANS_VARIABLE
 } TransObjectType;
 
 /* Element of stack with 'changedVars' and 'changedPacks' list heads*/

@@ -304,7 +304,7 @@ SELECT pgv_get('pack', 'var_text', NULL::text);
  before transaction block
 ```
 
-If you create variable after `BEGIN` or `SAVEPOINT` statements and than rollback
+If you create a transactional variable after `BEGIN` or `SAVEPOINT` statements and than rollback
 to previous state - variable will not be exist:
 
 ```sql
