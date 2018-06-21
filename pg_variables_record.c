@@ -66,20 +66,20 @@ record_match(const void *key1, const void *key2, Size keysize)
 void
 init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 {
-	HASHCTL			ctl;
-	char			hash_name[BUFSIZ];
-	MemoryContext	oldcxt,
-					topctx;
+	HASHCTL		ctl;
+	char		hash_name[BUFSIZ];
+	MemoryContext oldcxt,
+				topctx;
 	TypeCacheEntry *typentry;
-	Oid				keyid;
+	Oid			keyid;
 
 	Assert(variable->typid == RECORDOID);
 
 	sprintf(hash_name, "Records hash for variable \"%s\"", GetName(variable));
 
-	topctx = variable->is_transactional ? 
-			 variable->package->hctxTransact :
-			 variable->package->hctxRegular;
+	topctx = variable->is_transactional ?
+		variable->package->hctxTransact :
+		variable->package->hctxRegular;
 
 #if PG_VERSION_NUM >= 110000
 	record->hctx = AllocSetContextCreateExtended(topctx,
@@ -162,9 +162,9 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 			|| (attr1->attndims != attr2->attndims)
 			|| (attr1->atttypmod != attr2->atttypmod))
 			ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("new record structure differs from variable \"%s\" "
-						"structure", GetName(variable))));
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("new record structure differs from variable \"%s\" "
+							"structure", GetName(variable))));
 	}
 }
 
@@ -250,7 +250,7 @@ insert_record(Variable *variable, HeapTupleHeader tupleHeader)
  * Insert a record. New record key should be unique in the variable.
  */
 bool
-update_record(Variable* variable, HeapTupleHeader tupleHeader)
+update_record(Variable *variable, HeapTupleHeader tupleHeader)
 {
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;

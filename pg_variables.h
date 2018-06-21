@@ -42,7 +42,7 @@ typedef struct RecordVar
 	FmgrInfo	hash_proc;
 	/* Match function info */
 	FmgrInfo	cmp_proc;
-} RecordVar;
+}			RecordVar;
 
 typedef struct ScalarVar
 {
@@ -50,7 +50,7 @@ typedef struct ScalarVar
 	bool		is_null;
 	bool		typbyval;
 	int16		typlen;
-} ScalarVar;
+}			ScalarVar;
 
 /* State of TransObject instance */
 typedef struct TransState
@@ -64,7 +64,7 @@ typedef struct TransState
 typedef struct PackState
 {
 	TransState	state;
-} PackState;
+}			PackState;
 
 /* List node that stores one of the variable's states */
 typedef struct VarState
@@ -72,17 +72,17 @@ typedef struct VarState
 	TransState	state;
 	union
 	{
-		ScalarVar scalar;
-		RecordVar record;
-	}		value;
-} VarState;
+		ScalarVar	scalar;
+		RecordVar	record;
+	}			value;
+}			VarState;
 
 /* Transactional object */
 typedef struct TransObject
 {
 	char		name[NAMEDATALEN];
 	dlist_head	states;
-} TransObject;
+}			TransObject;
 
 /* Transactional package */
 typedef struct Package
@@ -92,21 +92,22 @@ typedef struct Package
 			   *varHashTransact;
 	/* Memory context for package variables for easy memory release */
 	MemoryContext hctxRegular,
-				  hctxTransact;
-} Package;
+				hctxTransact;
+}			Package;
 
 /* Transactional variable */
 typedef struct Variable
 {
-	TransObject	transObject;
-	Package	   *package;
+	TransObject transObject;
+	Package    *package;
 	Oid			typid;
+
 	/*
-	 * The flag determines the further behavior of the variable.
-	 * Can be specified only when creating a variable.
+	 * The flag determines the further behavior of the variable. Can be
+	 * specified only when creating a variable.
 	 */
 	bool		is_transactional;
-} Variable;
+}			Variable;
 
 typedef struct HashRecordKey
 {
@@ -116,27 +117,27 @@ typedef struct HashRecordKey
 	FmgrInfo   *hash_proc;
 	/* Match function info */
 	FmgrInfo   *cmp_proc;
-} HashRecordKey;
+}			HashRecordKey;
 
 typedef struct HashRecordEntry
 {
 	HashRecordKey key;
 	HeapTuple	tuple;
-} HashRecordEntry;
+}			HashRecordEntry;
 
 /* Element of list with objects created, changed or removed within transaction */
 typedef struct ChangedObject
 {
-	dlist_node		node;
-	TransObject	   *object;
-} ChangedObject;
+	dlist_node	node;
+	TransObject *object;
+}			ChangedObject;
 
 /* Type of transactional object instance */
 typedef enum TransObjectType
 {
 	TRANS_PACKAGE,
 	TRANS_VARIABLE
-} TransObjectType;
+}			TransObjectType;
 
 /* Element of stack with 'changedVars' and 'changedPacks' list heads*/
 typedef struct ChangesStackNode
@@ -145,18 +146,15 @@ typedef struct ChangesStackNode
 	dlist_head *changedVarsList;
 	dlist_head *changedPacksList;
 	MemoryContext ctx;
-} ChangesStackNode;
+}			ChangesStackNode;
 
 extern void init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable);
 extern void check_attributes(Variable *variable, TupleDesc tupdesc);
 extern void check_record_key(Variable *variable, Oid typid);
 
-extern void insert_record(Variable* variable,
-						  HeapTupleHeader tupleHeader);
-extern bool update_record(Variable *variable,
-						  HeapTupleHeader tupleHeader);
-extern bool delete_record(Variable* variable, Datum value,
-						  bool is_null);
+extern void insert_record(Variable *variable, HeapTupleHeader tupleHeader);
+extern bool update_record(Variable *variable, HeapTupleHeader tupleHeader);
+extern bool delete_record(Variable *variable, Datum value, bool is_null);
 
 #define GetActualState(object) \
 	(dlist_head_element(TransState, node, &((TransObject *) object)->states))
@@ -172,4 +170,4 @@ extern bool delete_record(Variable* variable, Datum value,
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
 	 &(object->transObject.states))
 
-#endif   /* __PG_VARIABLES_H__ */
+#endif							/* __PG_VARIABLES_H__ */
