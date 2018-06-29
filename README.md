@@ -304,7 +304,7 @@ SELECT pgv_get('pack', 'var_text', NULL::text);
  before transaction block
 ```
 
-If you create a transactional variable after `BEGIN` or `SAVEPOINT` statements 
+If you create a transactional variable after `BEGIN` or `SAVEPOINT` statements
 and then rollback to previous state - variable will not be exist:
 
 ```sql
@@ -342,15 +342,12 @@ SELECT * FROM pgv_stats();
  package | allocated_memory
 ---------+------------------
  pack    |            24576
-(1 row)
 
 ROLLBACK;
 SELECT * FROM pgv_list();
  package |   name    | is_transactional
 ---------+-----------+------------------
  pack    | var_trans | t
-(1 row)
-
 ```
 
 If you created transactional variable once, you should use flag `is_transactional`
