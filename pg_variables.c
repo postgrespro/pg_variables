@@ -1247,8 +1247,7 @@ static void
 makePackHTAB(Package *package, bool is_trans)
 {
 	HASHCTL		ctl;
-	char		key[NAMEDATALEN],
-				hash_name[BUFSIZ];
+	char		hash_name[BUFSIZ];
 
 	if (is_trans)
 		package->hctxTransact = AllocSetContextCreate(ModuleContext,
@@ -1260,7 +1259,7 @@ makePackHTAB(Package *package, bool is_trans)
 													 ALLOCSET_DEFAULT_SIZES);
 
 	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
-			 is_trans ? "Transactional" : "Regular", key);
+			 is_trans ? "Transactional" : "Regular", package->transObject.name);
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(Variable);
 	ctl.hcxt = (is_trans ? package->hctxTransact : package->hctxRegular);
