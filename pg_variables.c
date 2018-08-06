@@ -77,7 +77,8 @@ static void removeFromChangedVars(Package *package);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
-
+static inline ChangedObject *
+makeChangedObject(TransObject *object, MemoryContext ctx);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -1247,8 +1248,7 @@ static void
 makePackHTAB(Package *package, bool is_trans)
 {
 	HASHCTL		ctl;
-	char		key[NAMEDATALEN],
-				hash_name[BUFSIZ];
+	char		hash_name[BUFSIZ];
 
 	if (is_trans)
 		package->hctxTransact = AllocSetContextCreate(ModuleContext,
@@ -1260,7 +1260,7 @@ makePackHTAB(Package *package, bool is_trans)
 													 ALLOCSET_DEFAULT_SIZES);
 
 	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
-			 is_trans ? "Transactional" : "Regular", key);
+			 is_trans ? "Transactional" : "Regular", package->transObject.name);
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(Variable);
 	ctl.hcxt = (is_trans ? package->hctxTransact : package->hctxRegular);
@@ -1677,6 +1677,9 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 			/* Restore regular vars HTAB */
 			makePackHTAB((Package *) object, false);
 		}
+		else
+			/* Pass current state to parent level */
+			releaseSavepoint(object, TRANS_PACKAGE);
 	}
 	else
 	{
@@ -1696,39 +1699,57 @@ static void
 releaseSavepoint(TransObject *object, TransObjectType type)
 {
 	dlist_head *states;
-
 	Assert(GetActualState(object)->level == GetCurrentTransactionNestLevel());
-	states = &object->states;
 
-	/* Object existed in parent transaction */
-	if (dlist_has_next(states, dlist_head_node(states)))
+	/* Mark object as changed in parent transaction... */
+	if (!dlist_is_empty(changesStack) /* ...if there is an upper level... */
+		/* ...and object is not yet in list of that level changes. */
+		&& !isObjectChangedInUpperTrans(object))
 	{
-		TransState *stateToDelete;
-		dlist_node *nodeToDelete;
+		ChangedObject *co_new;
+		ChangesStackNode *csn;
 
-		/* Remove previous state */
-		nodeToDelete = dlist_next_node(states, dlist_head_node(states));
-		stateToDelete = dlist_container(TransState, node, nodeToDelete);
-		removeState(object, type, stateToDelete);
-	}
+		/*
+		 * Impossible to push in upper list existing node
+		 * because it was created in another context
+		 */
+		csn = dlist_head_element(ChangesStackNode, node, changesStack);
+		co_new = makeChangedObject(object, csn->ctx);
+		dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
+												csn->changedVarsList,
+												&co_new->node);
 
-	/*
-	 * Object has no more previous states and can be completely removed if
-	 * necessary
-	 */
-	if (!GetActualState(object)->is_valid &&
-		!dlist_has_next(states, dlist_head_node(states)))
-	{
-		removeObject(object, type);
 	}
-	/* Change subxact level due to release */
 	else
 	{
-		TransState *state;
+		states = &object->states;
 
-		state = GetActualState(object);
-		state->level--;
+		/* If object existed in parent transaction... */
+		if (dlist_has_next(states, dlist_head_node(states)))
+		{
+			TransState *stateToDelete;
+			dlist_node *nodeToDelete;
+
+			/* ...remove its previous state */
+			nodeToDelete = dlist_next_node(states, dlist_head_node(states));
+			stateToDelete = dlist_container(TransState, node, nodeToDelete);
+			removeState(object, type, stateToDelete);
+		}
+
+		/*
+		 * Object has no more previous states and can be completely removed if
+		 * necessary
+		 */
+		if (!GetActualState(object)->is_valid &&
+			!dlist_has_next(states, dlist_head_node(states)))
+		{
+			removeObject(object, type);
+			return;
+		}
 	}
+
+	/* Change subxact level due to release */
+	GetActualState(object)->level--;
 }
 
 /*
@@ -1961,31 +1982,7 @@ processChanges(Action action)
 							GetActualState(variable)->is_valid = false;
 					}
 
-					/* Did this object change at parent level? */
-					if (dlist_is_empty(changesStack) ||
-						isObjectChangedInUpperTrans(object))
-					{
-						/* We just have to drop previous state */
-						releaseSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
-					}
-					else
-					{
-						/* Mark object as changed at parent level */
-						ChangedObject *co_new;
-						ChangesStackNode *csn;
-
-						/*
-						 * Impossible to push in upper list existing node
-						 * because it was created in another context
-						 */
-						csn = dlist_head_element(ChangesStackNode, node, changesStack);
-						co_new = makeChangedObject(object, csn->ctx);
-						dlist_push_head(i ? csn->changedVarsList :
-										csn->changedPacksList, &co_new->node);
-
-						/* Change subxact level due to release */
-						GetActualState(object)->level--;
-					}
+					releaseSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
 					break;
 			}
 		}

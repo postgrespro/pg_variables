@@ -1758,11 +1758,11 @@ SELECT pgv_free();
  
 (1 row)
 
-SELECT package FROM pgv_stats();
+SELECT package FROM pgv_stats() ORDER BY package;
  package 
 ---------
- vars2
  vars
+ vars2
 (2 rows)
 
 SELECT * FROM pgv_list() ORDER BY package, name;
@@ -1771,11 +1771,11 @@ SELECT * FROM pgv_list() ORDER BY package, name;
 (0 rows)
 
 RELEASE sp5;
-SELECT package FROM pgv_stats();
+SELECT package FROM pgv_stats() ORDER BY package;
  package 
 ---------
- vars2
  vars
+ vars2
 (2 rows)
 
 SELECT * FROM pgv_list() ORDER BY package, name;
@@ -1784,7 +1784,7 @@ SELECT * FROM pgv_list() ORDER BY package, name;
 (0 rows)
 
 RELEASE sp4;
-SELECT package FROM pgv_stats();
+SELECT package FROM pgv_stats() ORDER BY package;
  package 
 ---------
  vars
@@ -1796,7 +1796,7 @@ SELECT * FROM pgv_list() ORDER BY package, name;
 (0 rows)
 
 COMMIT;
-SELECT package FROM pgv_stats();
+SELECT package FROM pgv_stats() ORDER BY package;
  package 
 ---------
 (0 rows)
