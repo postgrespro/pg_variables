@@ -77,8 +77,8 @@ static void removeFromChangedVars(Package *package);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
-static inline ChangedObject *
-makeChangedObject(TransObject *object, MemoryContext ctx);
+static inline ChangedObject *makeChangedObject(TransObject *object,
+											   MemoryContext ctx);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -1260,7 +1260,7 @@ makePackHTAB(Package *package, bool is_trans)
 													 ALLOCSET_DEFAULT_SIZES);
 
 	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
-			 is_trans ? "Transactional" : "Regular", package->transObject.name);
+			 is_trans ? "Transactional" : "Regular", GetName(package));
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(Variable);
 	ctl.hcxt = (is_trans ? package->hctxTransact : package->hctxRegular);
