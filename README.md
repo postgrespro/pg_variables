@@ -40,7 +40,7 @@ SELECT pgv_get('vars', 'trans_int', NULL::int);
 
 ## License
 
-This module available under the same license as
+This module available under the [license](LICENSE) similar to
 [PostgreSQL](http://www.postgresql.org/about/licence/).
 
 ## Installation
