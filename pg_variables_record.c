@@ -75,6 +75,26 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 
 	Assert(variable->typid == RECORDOID);
 
+	/* First get hash and match functions for key type. */
+	keyid = GetTupleDescAttr(tupdesc, 0)->atttypid;
+	typentry = lookup_type_cache(keyid,
+								 TYPECACHE_HASH_PROC_FINFO |
+								 TYPECACHE_CMP_PROC_FINFO);
+
+	if (!OidIsValid(typentry->hash_proc_finfo.fn_oid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("could not identify a hash function for type %s",
+						format_type_be(keyid))));
+
+	if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("could not identify a matching function for type %s",
+						format_type_be(keyid))));
+
+	/* Initialize the record */
+
 	sprintf(hash_name, "Records hash for variable \"%s\"", GetName(variable));
 
 	topctx = variable->is_transactional ?
@@ -108,24 +128,6 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 	record->rhash = hash_create(hash_name, NUMVARIABLES, &ctl,
 								HASH_ELEM | HASH_CONTEXT |
 								HASH_FUNCTION | HASH_COMPARE);
-
-	/* Get hash and match functions for key type. */
-	keyid = GetTupleDescAttr(record->tupdesc, 0)->atttypid;
-	typentry = lookup_type_cache(keyid,
-								 TYPECACHE_HASH_PROC_FINFO |
-								 TYPECACHE_CMP_PROC_FINFO);
-
-	if (!OidIsValid(typentry->hash_proc_finfo.fn_oid))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_FUNCTION),
-				 errmsg("could not identify a hash function for type %s",
-						format_type_be(keyid))));
-
-	if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_FUNCTION),
-				 errmsg("could not identify a matching function for type %s",
-						format_type_be(keyid))));
 
 	fmgr_info(typentry->hash_proc_finfo.fn_oid, &record->hash_proc);
 	fmgr_info(typentry->cmp_proc_finfo.fn_oid, &record->cmp_proc);
