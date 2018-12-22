@@ -1632,6 +1632,9 @@ removeObject(TransObject *object, TransObjectType type)
 
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
+
+	LastPackage = NULL;
+	LastVariable = NULL;
 }
 
 /*
