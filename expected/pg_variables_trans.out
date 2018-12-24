@@ -1838,3 +1838,19 @@ SELECT pgv_remove('vars');
  
 (1 row)
 
+-- REMOVED TRANSACTIONAL VARIABLE SHOULD BE NOT ACCESSIBLE THROUGH LastVariable
+SELECT pgv_insert('package', 'errs',row(n), true)
+FROM generate_series(1,5) AS gs(n) WHERE 1.0/(n-3)<>0;
+ERROR:  division by zero
+SELECT pgv_insert('package', 'errs',row(1), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
