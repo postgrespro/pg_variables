@@ -460,3 +460,10 @@ SELECT pgv_set('vars', 'trans1', 'package restored'::text, true);
 SELECT * FROM pgv_list() ORDER BY package, name;
 COMMIT;
 SELECT pgv_remove('vars');
+
+-- REMOVED TRANSACTIONAL VARIABLE SHOULD BE NOT ACCESSIBLE THROUGH LastVariable
+SELECT pgv_insert('package', 'errs',row(n), true)
+FROM generate_series(1,5) AS gs(n) WHERE 1.0/(n-3)<>0;
+SELECT pgv_insert('package', 'errs',row(1), true);
+
+SELECT pgv_free();
