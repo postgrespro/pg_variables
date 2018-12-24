@@ -1247,32 +1247,25 @@ ensurePackagesHashExists(void)
 static void
 makePackHTAB(Package *package, bool is_trans)
 {
-	HASHCTL		ctl;
-	char		hash_name[BUFSIZ];
+	HASHCTL			ctl;
+	char			hash_name[BUFSIZ];
+	HTAB		  **htab;
+	MemoryContext  *context;
 
-	if (is_trans)
-		package->hctxTransact = AllocSetContextCreate(ModuleContext,
-													  PGV_MCXT_VARS,
-													  ALLOCSET_DEFAULT_SIZES);
-	else
-		package->hctxRegular = AllocSetContextCreate(ModuleContext,
-													 PGV_MCXT_VARS,
-													 ALLOCSET_DEFAULT_SIZES);
+	htab = is_trans ? &package->varHashTransact : &package->varHashRegular;
+	context = is_trans ? &package->hctxTransact : &package->hctxRegular;
+
+	*context = AllocSetContextCreate(ModuleContext, PGV_MCXT_VARS,
+									 ALLOCSET_DEFAULT_SIZES);
 
 	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
 			 is_trans ? "Transactional" : "Regular", GetName(package));
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(Variable);
-	ctl.hcxt = (is_trans ? package->hctxTransact : package->hctxRegular);
+	ctl.hcxt = *context;
 
-	if (is_trans)
-		package->varHashTransact = hash_create(hash_name,
-											   NUMVARIABLES, &ctl,
-											   HASH_ELEM | HASH_CONTEXT);
-	else
-		package->varHashRegular = hash_create(hash_name,
-											  NUMVARIABLES, &ctl,
-											  HASH_ELEM | HASH_CONTEXT);
+	*htab = hash_create(hash_name, NUMVARIABLES, &ctl,
+						HASH_ELEM | HASH_CONTEXT);
 }
 
 static Package *
