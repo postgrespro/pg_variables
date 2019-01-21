@@ -1705,6 +1705,12 @@ SELECT pgv_free();
  
 (1 row)
 
+SELECT pgv_free(); -- Check sequential package removal in one subtransaction
+ pgv_free 
+----------
+ 
+(1 row)
+
 SELECT * FROM pgv_list() ORDER BY package, name;
  package | name | is_transactional 
 ---------+------+------------------

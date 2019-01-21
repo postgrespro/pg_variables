@@ -916,7 +916,11 @@ removePackageInternal(Package *package)
 	TransObject *transObject;
 
 	/* All regular variables will be freed */
-	MemoryContextDelete(package->hctxRegular);
+	if (package->hctxRegular)
+	{
+		MemoryContextDelete(package->hctxRegular);
+		package->hctxRegular = NULL;
+	}
 
 	/* Add to changes list */
 	transObject = &package->transObject;

@@ -425,6 +425,7 @@ SELECT pgv_set('vars', 'regular', 'regular variable exists'::text);
 SELECT pgv_set('vars', 'trans1', 'trans1 variable exists'::text, true);
 BEGIN;
 SELECT pgv_free();
+SELECT pgv_free(); -- Check sequential package removal in one subtransaction
 SELECT * FROM pgv_list() ORDER BY package, name;
 SELECT pgv_set('vars', 'trans2', 'trans2 variable exists'::text, true);
 SELECT * FROM pgv_list() ORDER BY package, name;
