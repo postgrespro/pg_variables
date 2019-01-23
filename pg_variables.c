@@ -237,6 +237,7 @@ VARIABLE_GET_TEMPLATE(0, 1, 2, jsonb, JSONBOID)
 
 /* current API */
 VARIABLE_GET_TEMPLATE(0, 1, 3, any, get_fn_expr_argtype(fcinfo->flinfo, 2))
+VARIABLE_GET_TEMPLATE(0, 1, 3, array, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
 
 #define VARIABLE_SET_TEMPLATE(type, typid) \
@@ -275,6 +276,7 @@ VARIABLE_SET_TEMPLATE(jsonb, JSONBOID)
 
 /* current API */
 VARIABLE_SET_TEMPLATE(any, get_fn_expr_argtype(fcinfo->flinfo, 2))
+VARIABLE_SET_TEMPLATE(array, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
 
 Datum

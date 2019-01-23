@@ -139,6 +139,26 @@ SELECT pgv_get('vars', 'd1', NULL::jsonb);
 SELECT pgv_set('vars', 'jNULL', NULL::jsonb);
 SELECT pgv_get('vars', 'jNULL', NULL::jsonb);
 
+-- Array variables
+SELECT pgv_set('vars', 'arr1', '{1, 2, null}'::int[]);
+SELECT pgv_set('vars', 'arr2', '{"bar", "balance", "active"}'::text[]);
+SELECT pgv_set('vars2', 'j1', '{1, 2, null}'::int[]);
+
+SELECT pgv_get('vars', 'arr1', NULL::int[]);
+SELECT pgv_get('vars', 'arr2', NULL::int[]);
+SELECT pgv_set('vars', 'arr1', '{"bar", "balance", "active"}'::text[]);
+SELECT pgv_set('vars', 'arr1', '{3, 4, 5}'::int[]);
+SELECT pgv_get('vars', 'arr1', NULL::int[]);
+
+SELECT pgv_get('vars', 'arr3', NULL::int[]);
+SELECT pgv_get('vars', 'arr3', NULL::int[], false);
+SELECT pgv_exists('vars', 'arr3');
+SELECT pgv_exists('vars', 'arr1');
+SELECT pgv_get('vars2', 'j1', NULL::int[]);
+
+SELECT pgv_set('vars', 'arrNULL', NULL::int[]);
+SELECT pgv_get('vars', 'arrNULL', NULL::int[]);
+
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
 
