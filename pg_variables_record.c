@@ -101,7 +101,13 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 		variable->package->hctxTransact :
 		variable->package->hctxRegular;
 
-#if PG_VERSION_NUM >= 110000
+#if PG_VERSION_NUM >= 120000
+	record->hctx = AllocSetContextCreateInternal(topctx,
+												 hash_name,
+												 ALLOCSET_DEFAULT_MINSIZE,
+												 ALLOCSET_DEFAULT_INITSIZE,
+												 ALLOCSET_DEFAULT_MAXSIZE);
+#elif PG_VERSION_NUM >= 110000
 	record->hctx = AllocSetContextCreateExtended(topctx,
 												 hash_name,
 												 ALLOCSET_DEFAULT_MINSIZE,

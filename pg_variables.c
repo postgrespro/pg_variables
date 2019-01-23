@@ -237,6 +237,7 @@ VARIABLE_GET_TEMPLATE(0, 1, 2, jsonb, JSONBOID)
 
 /* current API */
 VARIABLE_GET_TEMPLATE(0, 1, 3, any, get_fn_expr_argtype(fcinfo->flinfo, 2))
+VARIABLE_GET_TEMPLATE(0, 1, 3, array, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
 
 #define VARIABLE_SET_TEMPLATE(type, typid) \
@@ -275,6 +276,7 @@ VARIABLE_SET_TEMPLATE(jsonb, JSONBOID)
 
 /* current API */
 VARIABLE_SET_TEMPLATE(any, get_fn_expr_argtype(fcinfo->flinfo, 2))
+VARIABLE_SET_TEMPLATE(array, get_fn_expr_argtype(fcinfo->flinfo, 2))
 
 
 Datum
@@ -916,7 +918,11 @@ removePackageInternal(Package *package)
 	TransObject *transObject;
 
 	/* All regular variables will be freed */
-	MemoryContextDelete(package->hctxRegular);
+	if (package->hctxRegular)
+	{
+		MemoryContextDelete(package->hctxRegular);
+		package->hctxRegular = NULL;
+	}
 
 	/* Add to changes list */
 	transObject = &package->transObject;
@@ -1247,32 +1253,25 @@ ensurePackagesHashExists(void)
 static void
 makePackHTAB(Package *package, bool is_trans)
 {
-	HASHCTL		ctl;
-	char		hash_name[BUFSIZ];
+	HASHCTL			ctl;
+	char			hash_name[BUFSIZ];
+	HTAB		  **htab;
+	MemoryContext  *context;
 
-	if (is_trans)
-		package->hctxTransact = AllocSetContextCreate(ModuleContext,
-													  PGV_MCXT_VARS,
-													  ALLOCSET_DEFAULT_SIZES);
-	else
-		package->hctxRegular = AllocSetContextCreate(ModuleContext,
-													 PGV_MCXT_VARS,
-													 ALLOCSET_DEFAULT_SIZES);
+	htab = is_trans ? &package->varHashTransact : &package->varHashRegular;
+	context = is_trans ? &package->hctxTransact : &package->hctxRegular;
+
+	*context = AllocSetContextCreate(ModuleContext, PGV_MCXT_VARS,
+									 ALLOCSET_DEFAULT_SIZES);
 
 	snprintf(hash_name, BUFSIZ, "%s variables hash for package \"%s\"",
 			 is_trans ? "Transactional" : "Regular", GetName(package));
 	ctl.keysize = NAMEDATALEN;
 	ctl.entrysize = sizeof(Variable);
-	ctl.hcxt = (is_trans ? package->hctxTransact : package->hctxRegular);
+	ctl.hcxt = *context;
 
-	if (is_trans)
-		package->varHashTransact = hash_create(hash_name,
-											   NUMVARIABLES, &ctl,
-											   HASH_ELEM | HASH_CONTEXT);
-	else
-		package->varHashRegular = hash_create(hash_name,
-											  NUMVARIABLES, &ctl,
-											  HASH_ELEM | HASH_CONTEXT);
+	*htab = hash_create(hash_name, NUMVARIABLES, &ctl,
+						HASH_ELEM | HASH_CONTEXT);
 }
 
 static Package *
@@ -1632,6 +1631,9 @@ removeObject(TransObject *object, TransObjectType type)
 
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
+
+	LastPackage = NULL;
+	LastVariable = NULL;
 }
 
 /*

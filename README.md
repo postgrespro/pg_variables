@@ -91,6 +91,13 @@ Function | Returns
 `pgv_set(package text, name text, value anynonarray, is_transactional bool default false)` | `void`
 `pgv_get(package text, name text, var_type anynonarray, strict bool default true)` | `anynonarray`
 
+## Array variables functions
+
+Function | Returns
+-------- | -------
+`pgv_set(package text, name text, value anyarray, is_transactional bool default false)` | `void`
+`pgv_get(package text, name text, var_type anyarray, strict bool default true)` | `anyarray`
+
 ## **Deprecated** scalar variables functions
 
 ### Integer variables
@@ -181,7 +188,7 @@ Note that **pgv_stats()** works only with the PostgreSQL 9.6 and newer.
 
 ## Examples
 
-It is easy to use functions to work with scalar variables:
+It is easy to use functions to work with scalar and array variables:
 
 ```sql
 SELECT pgv_set('vars', 'int1', 101);
@@ -196,6 +203,13 @@ SELECT SELECT pgv_get('vars', 'text1', NULL::text);
     pgv_get
 ---------------
  text variable
+
+SELECT pgv_set('vars', 'arr1', '{101,102}'::int[]);
+
+SELECT pgv_get('vars', 'arr1', NULL::int[]);
+  pgv_get
+-----------
+ {101,102}
 ```
 
 Let's assume we have a **tab** table:
@@ -246,6 +260,7 @@ You can list packages and variables:
 SELECT * FROM pgv_list() order by package, name;
  package | name  | is_transactional
 ---------+-------+------------------
+ vars    | arr1  | f
  vars    | int1  | f
  vars    | r1    | f
  vars    | text1 | f
@@ -257,7 +272,7 @@ And get used memory in bytes:
 SELECT * FROM pgv_stats() order by package;
  package | allocated_memory
 ---------+------------------
- vars    |            32768
+ vars    |            49152
 ```
 
 You can delete variables or whole packages:

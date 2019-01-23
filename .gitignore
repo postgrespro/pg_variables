@@ -41,3 +41,4 @@ lib*.pc
 /tmp_install/
 Dockerfile
 pg_variables--1.1.sql
+pg_variables--1.2.sql
