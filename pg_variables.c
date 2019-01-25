@@ -57,6 +57,7 @@ static Variable *createVariableInternal(Package *package,
 										text *name, Oid typid,
 										bool is_transactional);
 static void removePackageInternal(Package *package);
+static void resetVariablesCache(bool with_package);
 
 /* Functions to work with transactional objects */
 static void createSavepoint(TransObject *object, TransObjectType type);
@@ -99,6 +100,8 @@ static MemoryContext ModuleContext = NULL;
 static Package *LastPackage = NULL;
 /* Recent variable */
 static Variable *LastVariable = NULL;
+/* Recent row type id */
+static Oid LastTypeId = InvalidOid;
 
 
 /* This stack contains lists of changed variables and packages per each subxact level */
@@ -291,7 +294,7 @@ variable_insert(PG_FUNCTION_ARGS)
 
 	Oid			tupType;
 	int32		tupTypmod;
-	TupleDesc	tupdesc;
+	TupleDesc	tupdesc = NULL;
 	RecordVar  *record;
 
 	/* Checks */
@@ -360,7 +363,6 @@ variable_insert(PG_FUNCTION_ARGS)
 	/* Insert a record */
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
-	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 
 	record = &(GetActualValue(variable).record);
 	if (!record->tupdesc)
@@ -368,15 +370,27 @@ variable_insert(PG_FUNCTION_ARGS)
 		/*
 		 * This is the first record for the var_name. Initialize record.
 		 */
+		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 		init_record(record, tupdesc, variable);
 	}
-	else
+	else if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
+		LastTypeId != tupType)
+	{
+		/*
+		 * We need to check attributes of the new row if this is a transient
+		 * record type or if last record has different id.
+		 */
+		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 		check_attributes(variable, tupdesc);
+	}
+
+	LastTypeId = tupType;
 
 	insert_record(variable, rec);
 
 	/* Release resources */
-	ReleaseTupleDesc(tupdesc);
+	if (tupdesc)
+		ReleaseTupleDesc(tupdesc);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -396,7 +410,6 @@ variable_update(PG_FUNCTION_ARGS)
 	bool		res;
 	Oid			tupType;
 	int32		tupTypmod;
-	TupleDesc	tupdesc;
 
 	/* Checks */
 	CHECK_ARGS_FOR_NULL();
@@ -447,14 +460,22 @@ variable_update(PG_FUNCTION_ARGS)
 	/* Update a record */
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
-	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 
-	check_attributes(variable, tupdesc);
+	if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
+		LastTypeId != tupType)
+	{
+		TupleDesc	tupdesc = NULL;
+
+		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
+		check_attributes(variable, tupdesc);
+		ReleaseTupleDesc(tupdesc);
+	}
+
+	LastTypeId = tupType;
+
 	res = update_record(variable, rec);
 
 	/* Release resources */
-	ReleaseTupleDesc(tupdesc);
-
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
 
@@ -867,8 +888,7 @@ remove_variable(PG_FUNCTION_ARGS)
 		GetActualState(variable)->is_valid = false;
 	}
 
-	/* Remove variable from cache */
-	LastVariable = NULL;
+	resetVariablesCache(false);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -904,9 +924,7 @@ remove_package(PG_FUNCTION_ARGS)
 				 errmsg("unrecognized package \"%s\"", key)));
 	}
 
-	/* Remove package and variable from cache */
-	LastPackage = NULL;
-	LastVariable = NULL;
+	resetVariablesCache(true);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
@@ -935,6 +953,20 @@ removePackageInternal(Package *package)
 }
 
 /*
+ * Reset cache variables to their default values. It is necessary to do in case
+ * of some changes: removing, rollbacking, etc.
+ */
+static void
+resetVariablesCache(bool with_package)
+{
+	/* Remove package and variable from cache */
+	if (with_package)
+		LastPackage = NULL;
+	LastVariable = NULL;
+	LastTypeId = InvalidOid;
+}
+
+/*
  * Remove all packages and variables.
  * Memory context will be released after committing.
  */
@@ -955,9 +987,7 @@ remove_packages(PG_FUNCTION_ARGS)
 		removePackageInternal(package);
 	}
 
-	/* Remove package and variable from cache */
-	LastPackage = NULL;
-	LastVariable = NULL;
+	resetVariablesCache(true);
 
 	PG_RETURN_VOID();
 }
@@ -1632,8 +1662,7 @@ removeObject(TransObject *object, TransObjectType type)
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
 
-	LastPackage = NULL;
-	LastVariable = NULL;
+	resetVariablesCache(true);
 }
 
 /*
@@ -2004,8 +2033,7 @@ processChanges(Action action)
 		MemoryContextDelete(ModuleContext);
 		packagesHash = NULL;
 		ModuleContext = NULL;
-		LastPackage = NULL;
-		LastVariable = NULL;
+		resetVariablesCache(true);
 		changesStack = NULL;
 		changesStackContext = NULL;
 	}
