@@ -81,6 +81,9 @@ static void makePackHTAB(Package *package, bool is_trans);
 static inline ChangedObject *makeChangedObject(TransObject *object,
 											   MemoryContext ctx);
 
+/* Hook functions */
+static void variable_ExecutorEnd(QueryDesc *queryDesc);
+
 #define CHECK_ARGS_FOR_NULL() \
 do { \
 	if (fcinfo->argnull[0]) \
@@ -103,6 +106,16 @@ static Variable *LastVariable = NULL;
 /* Recent row type id */
 static Oid LastTypeId = InvalidOid;
 
+/*
+ * Cache sequentially search through hash table status.  It is necessary for
+ * clean up if hash_seq_term() wasn't called or if we didn't scan the whole
+ * table. In this case we need to manually call hash_seq_term() within
+ * variable_ExecutorEnd().
+ */
+static HASH_SEQ_STATUS *LastHSeqStatus = NULL;
+
+/* Saved hook values for recall */
+static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
 /* This stack contains lists of changed variables and packages per each subxact level */
 static dlist_head *changesStack = NULL;
@@ -596,6 +609,8 @@ variable_select(PG_FUNCTION_ARGS)
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
 		PG_FREE_IF_COPY(var_name, 1);
+
+		LastHSeqStatus = rstat;
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
@@ -613,6 +628,7 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
+		LastHSeqStatus = NULL;
 		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -1187,6 +1203,8 @@ get_packages_stats(PG_FUNCTION_ARGS)
 			hash_seq_init(pstat, packagesHash);
 
 			funcctx->user_fctx = pstat;
+
+			LastHSeqStatus = pstat;
 		}
 		else
 			funcctx->user_fctx = NULL;
@@ -1232,6 +1250,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
+		LastHSeqStatus = NULL;
 		pfree(pstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -2094,6 +2113,23 @@ pgvTransCallback(XactEvent event, void *arg)
 }
 
 /*
+ * ExecutorEnd hook: clean up hash table sequential scan status
+ */
+static void
+variable_ExecutorEnd(QueryDesc *queryDesc)
+{
+	if (LastHSeqStatus)
+	{
+		hash_seq_term(LastHSeqStatus);
+		LastHSeqStatus = NULL;
+	}
+	if (prev_ExecutorEnd)
+		prev_ExecutorEnd(queryDesc);
+	else
+		standard_ExecutorEnd(queryDesc);
+}
+
+/*
  * Register callback function when module starts
  */
 void
@@ -2101,6 +2137,10 @@ _PG_init(void)
 {
 	RegisterXactCallback(pgvTransCallback, NULL);
 	RegisterSubXactCallback(pgvSubTransCallback, NULL);
+
+	/* Install hooks. */
+	prev_ExecutorEnd = ExecutorEnd_hook;
+	ExecutorEnd_hook = variable_ExecutorEnd;
 }
 
 /*
@@ -2111,4 +2151,5 @@ _PG_fini(void)
 {
 	UnregisterXactCallback(pgvTransCallback, NULL);
 	UnregisterSubXactCallback(pgvSubTransCallback, NULL);
+	ExecutorEnd_hook = prev_ExecutorEnd;
 }
