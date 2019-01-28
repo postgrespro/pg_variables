@@ -68,7 +68,6 @@ static void copyValue(VarState *src, VarState *dest, Variable *destVar);
 static void freeValue(VarState *varstate, Oid typid);
 static void removeState(TransObject *object, TransObjectType type,
 						TransState *stateToDelete);
-static void removeObject(TransObject *object, TransObjectType type);
 static bool isObjectChangedInCurrentTrans(TransObject *object);
 static bool isObjectChangedInUpperTrans(TransObject *object);
 
@@ -1626,13 +1625,14 @@ copyValue(VarState *src, VarState *dest, Variable *destVar)
 static void
 freeValue(VarState *varstate, Oid typid)
 {
-	if (typid == RECORDOID)
+	if (typid == RECORDOID && varstate->value.record.hctx)
 	{
 		/* All records will be freed */
 		MemoryContextDelete(varstate->value.record.hctx);
 	}
 	else if (varstate->value.scalar.typbyval == false &&
-			 varstate->value.scalar.is_null == false)
+			 varstate->value.scalar.is_null == false &&
+			 varstate->value.scalar.value)
 	{
 		pfree(DatumGetPointer(varstate->value.scalar.value));
 	}
@@ -1651,7 +1651,8 @@ removeState(TransObject *object, TransObjectType type, TransState *stateToDelete
 	pfree(stateToDelete);
 }
 
-static void
+/* Remove package or variable (either transactional or regular) */
+void
 removeObject(TransObject *object, TransObjectType type)
 {
 	bool		found;
@@ -1672,7 +1673,9 @@ removeObject(TransObject *object, TransObjectType type)
 		hash = packagesHash;
 	}
 	else
-		hash = ((Variable *) object)->package->varHashTransact;
+		hash = ((Variable *) object)->is_transactional ?
+			   ((Variable *) object)->package->varHashTransact :
+			   ((Variable *) object)->package->varHashRegular;
 
 	/* Remove all object's states */
 	while (!dlist_is_empty(&object->states))

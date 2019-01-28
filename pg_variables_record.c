@@ -81,17 +81,29 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 								 TYPECACHE_HASH_PROC_FINFO |
 								 TYPECACHE_CMP_PROC_FINFO);
 
+	/*
+	 * In case something went wrong, you need to roll back the changes before
+	 * completing the transaction, because the variable may be regular
+	 * and not present in list of changed vars.
+	 */
 	if (!OidIsValid(typentry->hash_proc_finfo.fn_oid))
+	{
+		/* At this point variable is just created, so we simply remove it. */
+		removeObject(&variable->transObject, TRANS_VARIABLE);
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_FUNCTION),
 				 errmsg("could not identify a hash function for type %s",
 						format_type_be(keyid))));
+	}
 
 	if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
+	{
+		removeObject(&variable->transObject, TRANS_VARIABLE);
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_FUNCTION),
 				 errmsg("could not identify a matching function for type %s",
 						format_type_be(keyid))));
+	}
 
 	/* Initialize the record */
 
