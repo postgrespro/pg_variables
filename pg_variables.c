@@ -57,6 +57,7 @@ static Variable *createVariableInternal(Package *package,
 										text *name, Oid typid,
 										bool is_transactional);
 static void removePackageInternal(Package *package);
+static void resetVariablesCache(bool with_package);
 
 /* Functions to work with transactional objects */
 static void createSavepoint(TransObject *object, TransObjectType type);
@@ -67,7 +68,6 @@ static void copyValue(VarState *src, VarState *dest, Variable *destVar);
 static void freeValue(VarState *varstate, Oid typid);
 static void removeState(TransObject *object, TransObjectType type,
 						TransState *stateToDelete);
-static void removeObject(TransObject *object, TransObjectType type);
 static bool isObjectChangedInCurrentTrans(TransObject *object);
 static bool isObjectChangedInUpperTrans(TransObject *object);
 
@@ -79,6 +79,9 @@ static void removeFromChangedVars(Package *package);
 static void makePackHTAB(Package *package, bool is_trans);
 static inline ChangedObject *makeChangedObject(TransObject *object,
 											   MemoryContext ctx);
+
+/* Hook functions */
+static void variable_ExecutorEnd(QueryDesc *queryDesc);
 
 #define CHECK_ARGS_FOR_NULL() \
 do { \
@@ -99,7 +102,19 @@ static MemoryContext ModuleContext = NULL;
 static Package *LastPackage = NULL;
 /* Recent variable */
 static Variable *LastVariable = NULL;
+/* Recent row type id */
+static Oid LastTypeId = InvalidOid;
 
+/*
+ * Cache sequentially search through hash table status.  It is necessary for
+ * clean up if hash_seq_term() wasn't called or if we didn't scan the whole
+ * table. In this case we need to manually call hash_seq_term() within
+ * variable_ExecutorEnd().
+ */
+static HASH_SEQ_STATUS *LastHSeqStatus = NULL;
+
+/* Saved hook values for recall */
+static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
 /* This stack contains lists of changed variables and packages per each subxact level */
 static dlist_head *changesStack = NULL;
@@ -291,7 +306,7 @@ variable_insert(PG_FUNCTION_ARGS)
 
 	Oid			tupType;
 	int32		tupTypmod;
-	TupleDesc	tupdesc;
+	TupleDesc	tupdesc = NULL;
 	RecordVar  *record;
 
 	/* Checks */
@@ -360,7 +375,6 @@ variable_insert(PG_FUNCTION_ARGS)
 	/* Insert a record */
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
-	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 
 	record = &(GetActualValue(variable).record);
 	if (!record->tupdesc)
@@ -368,15 +382,27 @@ variable_insert(PG_FUNCTION_ARGS)
 		/*
 		 * This is the first record for the var_name. Initialize record.
 		 */
+		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 		init_record(record, tupdesc, variable);
 	}
-	else
+	else if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
+		LastTypeId != tupType)
+	{
+		/*
+		 * We need to check attributes of the new row if this is a transient
+		 * record type or if last record has different id.
+		 */
+		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 		check_attributes(variable, tupdesc);
+	}
+
+	LastTypeId = tupType;
 
 	insert_record(variable, rec);
 
 	/* Release resources */
-	ReleaseTupleDesc(tupdesc);
+	if (tupdesc)
+		ReleaseTupleDesc(tupdesc);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -396,7 +422,6 @@ variable_update(PG_FUNCTION_ARGS)
 	bool		res;
 	Oid			tupType;
 	int32		tupTypmod;
-	TupleDesc	tupdesc;
 
 	/* Checks */
 	CHECK_ARGS_FOR_NULL();
@@ -447,14 +472,22 @@ variable_update(PG_FUNCTION_ARGS)
 	/* Update a record */
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
-	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 
-	check_attributes(variable, tupdesc);
+	if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
+		LastTypeId != tupType)
+	{
+		TupleDesc	tupdesc = NULL;
+
+		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
+		check_attributes(variable, tupdesc);
+		ReleaseTupleDesc(tupdesc);
+	}
+
+	LastTypeId = tupType;
+
 	res = update_record(variable, rec);
 
 	/* Release resources */
-	ReleaseTupleDesc(tupdesc);
-
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
 
@@ -575,6 +608,8 @@ variable_select(PG_FUNCTION_ARGS)
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
 		PG_FREE_IF_COPY(var_name, 1);
+
+		LastHSeqStatus = rstat;
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
@@ -592,6 +627,7 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
+		LastHSeqStatus = NULL;
 		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -867,8 +903,7 @@ remove_variable(PG_FUNCTION_ARGS)
 		GetActualState(variable)->is_valid = false;
 	}
 
-	/* Remove variable from cache */
-	LastVariable = NULL;
+	resetVariablesCache(false);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -904,9 +939,7 @@ remove_package(PG_FUNCTION_ARGS)
 				 errmsg("unrecognized package \"%s\"", key)));
 	}
 
-	/* Remove package and variable from cache */
-	LastPackage = NULL;
-	LastVariable = NULL;
+	resetVariablesCache(true);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
@@ -935,6 +968,20 @@ removePackageInternal(Package *package)
 }
 
 /*
+ * Reset cache variables to their default values. It is necessary to do in case
+ * of some changes: removing, rollbacking, etc.
+ */
+static void
+resetVariablesCache(bool with_package)
+{
+	/* Remove package and variable from cache */
+	if (with_package)
+		LastPackage = NULL;
+	LastVariable = NULL;
+	LastTypeId = InvalidOid;
+}
+
+/*
  * Remove all packages and variables.
  * Memory context will be released after committing.
  */
@@ -955,9 +1002,7 @@ remove_packages(PG_FUNCTION_ARGS)
 		removePackageInternal(package);
 	}
 
-	/* Remove package and variable from cache */
-	LastPackage = NULL;
-	LastVariable = NULL;
+	resetVariablesCache(true);
 
 	PG_RETURN_VOID();
 }
@@ -1157,6 +1202,8 @@ get_packages_stats(PG_FUNCTION_ARGS)
 			hash_seq_init(pstat, packagesHash);
 
 			funcctx->user_fctx = pstat;
+
+			LastHSeqStatus = pstat;
 		}
 		else
 			funcctx->user_fctx = NULL;
@@ -1202,6 +1249,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
+		LastHSeqStatus = NULL;
 		pfree(pstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -1577,13 +1625,14 @@ copyValue(VarState *src, VarState *dest, Variable *destVar)
 static void
 freeValue(VarState *varstate, Oid typid)
 {
-	if (typid == RECORDOID)
+	if (typid == RECORDOID && varstate->value.record.hctx)
 	{
 		/* All records will be freed */
 		MemoryContextDelete(varstate->value.record.hctx);
 	}
 	else if (varstate->value.scalar.typbyval == false &&
-			 varstate->value.scalar.is_null == false)
+			 varstate->value.scalar.is_null == false &&
+			 varstate->value.scalar.value)
 	{
 		pfree(DatumGetPointer(varstate->value.scalar.value));
 	}
@@ -1602,7 +1651,8 @@ removeState(TransObject *object, TransObjectType type, TransState *stateToDelete
 	pfree(stateToDelete);
 }
 
-static void
+/* Remove package or variable (either transactional or regular) */
+void
 removeObject(TransObject *object, TransObjectType type)
 {
 	bool		found;
@@ -1623,7 +1673,9 @@ removeObject(TransObject *object, TransObjectType type)
 		hash = packagesHash;
 	}
 	else
-		hash = ((Variable *) object)->package->varHashTransact;
+		hash = ((Variable *) object)->is_transactional ?
+			   ((Variable *) object)->package->varHashTransact :
+			   ((Variable *) object)->package->varHashRegular;
 
 	/* Remove all object's states */
 	while (!dlist_is_empty(&object->states))
@@ -1632,8 +1684,7 @@ removeObject(TransObject *object, TransObjectType type)
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
 
-	LastPackage = NULL;
-	LastVariable = NULL;
+	resetVariablesCache(true);
 }
 
 /*
@@ -2004,8 +2055,7 @@ processChanges(Action action)
 		MemoryContextDelete(ModuleContext);
 		packagesHash = NULL;
 		ModuleContext = NULL;
-		LastPackage = NULL;
-		LastVariable = NULL;
+		resetVariablesCache(true);
 		changesStack = NULL;
 		changesStackContext = NULL;
 	}
@@ -2066,6 +2116,23 @@ pgvTransCallback(XactEvent event, void *arg)
 }
 
 /*
+ * ExecutorEnd hook: clean up hash table sequential scan status
+ */
+static void
+variable_ExecutorEnd(QueryDesc *queryDesc)
+{
+	if (LastHSeqStatus)
+	{
+		hash_seq_term(LastHSeqStatus);
+		LastHSeqStatus = NULL;
+	}
+	if (prev_ExecutorEnd)
+		prev_ExecutorEnd(queryDesc);
+	else
+		standard_ExecutorEnd(queryDesc);
+}
+
+/*
  * Register callback function when module starts
  */
 void
@@ -2073,6 +2140,10 @@ _PG_init(void)
 {
 	RegisterXactCallback(pgvTransCallback, NULL);
 	RegisterSubXactCallback(pgvSubTransCallback, NULL);
+
+	/* Install hooks. */
+	prev_ExecutorEnd = ExecutorEnd_hook;
+	ExecutorEnd_hook = variable_ExecutorEnd;
 }
 
 /*
@@ -2083,4 +2154,5 @@ _PG_fini(void)
 {
 	UnregisterXactCallback(pgvTransCallback, NULL);
 	UnregisterSubXactCallback(pgvSubTransCallback, NULL);
+	ExecutorEnd_hook = prev_ExecutorEnd;
 }

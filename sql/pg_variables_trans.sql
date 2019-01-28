@@ -467,4 +467,8 @@ SELECT pgv_insert('package', 'errs',row(n), true)
 FROM generate_series(1,5) AS gs(n) WHERE 1.0/(n-3)<>0;
 SELECT pgv_insert('package', 'errs',row(1), true);
 
+-- Variable should not exists in case when error occurs during creation
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
+SELECT pgv_select('vars4', 'r1', 0);
+
 SELECT pgv_free();

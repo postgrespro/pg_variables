@@ -553,6 +553,20 @@ SELECT pgv_insert('vars3', 'r1', row(1, 1));
 ERROR:  new record structure differs from variable "r1" structure
 SELECT pgv_insert('vars3', 'r1', row('str1', 'str1'));
 ERROR:  new record structure differs from variable "r1" structure
+SELECT pgv_select('vars3', 'r1') LIMIT 2;
+ pgv_select 
+------------
+ (,strNULL)
+ (1,str11)
+(2 rows)
+
+SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+ pgv_select 
+------------
+ (2,)
+ (0,str00)
+(2 rows)
+
 SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
