@@ -73,7 +73,7 @@ static bool isObjectChangedInUpperTrans(TransObject *object);
 
 static void addToChangesStack(TransObject *object, TransObjectType type);
 static void pushChangesStack(void);
-static void removeFromChangedVars(Package *package);
+static void removeFromChangesStack(TransObject *transObj, TransObjectType type);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
@@ -1658,16 +1658,16 @@ removeObject(TransObject *object, TransObjectType type)
 	bool		found;
 	HTAB	   *hash;
 
+	/*
+	 * Delete an object from the change history of the overlying
+	 * transaction level (head of 'changesStack' at this point).
+	 */
+	if (!dlist_is_empty(changesStack))
+			removeFromChangesStack(object, type);
 	if (type == TRANS_PACKAGE)
 	{
 		Package    *package = (Package *) object;
 
-		/*
-		 * Delete a variable from the change history of the overlying
-		 * transaction level (head of 'changesStack' at this point)
-		 */
-		if (!dlist_is_empty(changesStack))
-			removeFromChangedVars(package);
 		/* Regular variables had already removed */
 		MemoryContextDelete(package->hctxTransact);
 		hash = packagesHash;
@@ -1939,33 +1939,40 @@ addToChangesStack(TransObject *transObj, TransObjectType type)
  * Remove from the changes list a deleted package
  */
 static void
-removeFromChangedVars(Package *package)
+removeFromChangesStack(TransObject *object, TransObjectType type)
 {
 	dlist_mutable_iter var_miter,
-				pack_miter;
-	dlist_head *changedVarsList,
-			   *changedPacksList;
+					   pack_miter;
+	dlist_head		  *changesList;
+	ChangesStackNode  *csn = get_actual_changes_list();
 
-	/* First remove corresponding variables from changedVarsList */
-	changedVarsList = get_actual_changes_list()->changedVarsList;
-	dlist_foreach_modify(var_miter, changedVarsList)
+	/*
+	 * If we remove package, we should remove corresponding variables
+	 * from changedVarsList first.
+	 */
+	if (type == TRANS_PACKAGE)
 	{
-		ChangedObject *co_cur = dlist_container(ChangedObject, node,
-												var_miter.cur);
-		Variable   *var = (Variable *) co_cur->object;
+		changesList = csn->changedVarsList;
+		dlist_foreach_modify(var_miter, changesList)
+		{
+			ChangedObject *co_cur = dlist_container(ChangedObject, node,
+													var_miter.cur);
+			Variable   *var = (Variable *) co_cur->object;
 
-		if (var->package == package)
-			dlist_delete(&co_cur->node);
+			if (var->package == (Package *)object)
+				dlist_delete(&co_cur->node);
+		}
 	}
-	/* Now remove package itself from changedPacksList */
-	changedPacksList = get_actual_changes_list()->changedPacksList;
-	dlist_foreach_modify(pack_miter, changedPacksList)
+	/* Now remove object itself from changes list */
+	changesList = (type == TRANS_PACKAGE ? csn->changedPacksList :
+										   csn->changedVarsList);
+	dlist_foreach_modify(pack_miter, changesList)
 	{
 		ChangedObject *co_cur = dlist_container(ChangedObject, node,
 												pack_miter.cur);
-		Package    *pack = (Package *) co_cur->object;
+		TransObject *obj = co_cur->object;
 
-		if (pack == package)
+		if (obj == object)
 		{
 			dlist_delete(&co_cur->node);
 			break;
