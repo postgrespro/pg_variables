@@ -73,7 +73,7 @@ static bool isObjectChangedInUpperTrans(TransObject *object);
 
 static void addToChangesStack(TransObject *object, TransObjectType type);
 static void pushChangesStack(void);
-static void removeFromChangesStack(TransObject *transObj, TransObjectType type);
+static void removeFromChangesStack(TransObject *object, TransObjectType type);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
@@ -1691,24 +1691,24 @@ removeObject(TransObject *object, TransObjectType type)
  * Create a new state of object
  */
 static void
-createSavepoint(TransObject *transObj, TransObjectType type)
+createSavepoint(TransObject *object, TransObjectType type)
 {
 	TransState *newState,
 			   *prevState;
 
-	prevState = GetActualState(transObj);
+	prevState = GetActualState(object);
 	if (type == TRANS_PACKAGE)
 		newState = (TransState *) MemoryContextAllocZero(ModuleContext,
 														 sizeof(PackState));
 	else
 	{
-		Variable   *var = (Variable *) transObj;
+		Variable   *var = (Variable *) object;
 
 		newState = (TransState *) MemoryContextAllocZero(var->package->hctxTransact,
 														 sizeof(VarState));
 		copyValue((VarState *) prevState, (VarState *) newState, var);
 	}
-	dlist_push_head(&transObj->states, &newState->node);
+	dlist_push_head(&object->states, &newState->node);
 	newState->is_valid = prevState->is_valid;
 }
 
@@ -1809,14 +1809,14 @@ releaseSavepoint(TransObject *object, TransObjectType type)
  * Check if object was changed in current transaction level
  */
 static bool
-isObjectChangedInCurrentTrans(TransObject *transObj)
+isObjectChangedInCurrentTrans(TransObject *object)
 {
 	TransState *state;
 
 	if (!changesStack)
 		return false;
 
-	state = GetActualState(transObj);
+	state = GetActualState(object);
 	return state->level == GetCurrentTransactionNestLevel();
 }
 
@@ -1916,22 +1916,22 @@ makeChangedObject(TransObject *object, MemoryContext ctx)
  * in current transaction level
  */
 static void
-addToChangesStack(TransObject *transObj, TransObjectType type)
+addToChangesStack(TransObject *object, TransObjectType type)
 {
 	prepareChangesStack();
 
-	if (!isObjectChangedInCurrentTrans(transObj))
+	if (!isObjectChangedInCurrentTrans(object))
 	{
 		ChangesStackNode *csn;
 		ChangedObject *co;
 
 		csn = get_actual_changes_list();
-		co = makeChangedObject(transObj, csn->ctx);
+		co = makeChangedObject(object, csn->ctx);
 		dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
 						csn->changedVarsList, &co->node);
 
 		/* Give this object current subxact level */
-		GetActualState(transObj)->level = GetCurrentTransactionNestLevel();
+		GetActualState(object)->level = GetCurrentTransactionNestLevel();
 	}
 }
 
