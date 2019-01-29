@@ -471,4 +471,15 @@ SELECT pgv_insert('package', 'errs',row(1), true);
 SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
 SELECT pgv_select('vars4', 'r1', 0);
 
+-- If variable created and removed in same transaction level,
+-- it should be totally removed and should not be present
+-- in changes list and cache.
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+SAVEPOINT comm;
+SELECT pgv_remove('vars', 'any1');
+RELEASE comm;
+SELECT pgv_get('vars', 'any1',NULL::text);
+COMMIT;
+
 SELECT pgv_free();
