@@ -56,7 +56,7 @@ Typical installation procedure may look like this:
 ## Module functions
 
 The functions provided by the **pg_variables** module are shown in the tables
-below. The module supports the following scalar and record types.
+below.
 
 To use **pgv_get()** function required package and variable must exists. It is
 necessary to set variable with **pgv_set()** function to use **pgv_get()**
