@@ -1859,6 +1859,27 @@ SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
 ERROR:  could not identify a hash function for type unknown
 SELECT pgv_select('vars4', 'r1', 0);
 ERROR:  unrecognized variable "r1"
+-- If variable created and removed in same transaction level,
+-- it should be totally removed and should not be present
+-- in changes list and cache.
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+SAVEPOINT comm;
+SELECT pgv_remove('vars', 'any1');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+RELEASE comm;
+SELECT pgv_get('vars', 'any1',NULL::text);
+ERROR:  unrecognized variable "any1"
+COMMIT;
 SELECT pgv_free();
  pgv_free 
 ----------
