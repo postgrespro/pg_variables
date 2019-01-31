@@ -153,9 +153,6 @@ SELECT pgv_insert('vars3', 'r1', row(1, 'str1', 'str2'));
 SELECT pgv_insert('vars3', 'r1', row(1, 1));
 SELECT pgv_insert('vars3', 'r1', row('str1', 'str1'));
 
-SELECT pgv_select('vars3', 'r1') LIMIT 2;
-SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
-
 SELECT pgv_select('vars3', 'r1');
 SELECT pgv_select('vars3', 'r1', 1);
 SELECT pgv_select('vars3', 'r1', 0);
@@ -174,6 +171,17 @@ SELECT pgv_select('vars3', 'r3');
 SELECT pgv_exists('vars3', 'r3');
 SELECT pgv_exists('vars3', 'r1');
 SELECT pgv_select('vars2', 'j1');
+
+-- Tests for SRF's sequential scan of an internal hash table
+DO
+$$BEGIN
+    PERFORM pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+    PERFORM pgv_select('vars3', 'r3');
+END$$;
+-- Check that the hash table was cleaned up after rollback
+SELECT pgv_select('vars3', 'r1', 1);
+SELECT pgv_select('vars3', 'r1') LIMIT 2;
+SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
 
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;

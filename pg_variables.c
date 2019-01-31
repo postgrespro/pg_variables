@@ -2121,14 +2121,9 @@ pgvTransCallback(XactEvent event, void *arg)
 		}
 	}
 
-	if (event == XACT_EVENT_PARALLEL_COMMIT || event == XACT_EVENT_COMMIT ||
-		event == XACT_EVENT_PREPARE ||
-		event == XACT_EVENT_PARALLEL_ABORT || event == XACT_EVENT_ABORT)
+	if (event == XACT_EVENT_PARALLEL_ABORT || event == XACT_EVENT_ABORT)
 		if (LastHSeqStatus)
-		{
-			hash_seq_term(LastHSeqStatus);
 			LastHSeqStatus = NULL;
-		}
 }
 
 /*
