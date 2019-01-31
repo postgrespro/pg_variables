@@ -80,9 +80,6 @@ static void makePackHTAB(Package *package, bool is_trans);
 static inline ChangedObject *makeChangedObject(TransObject *object,
 											   MemoryContext ctx);
 
-/* Hook functions */
-static void variable_ExecutorEnd(QueryDesc *queryDesc);
-
 #define CHECK_ARGS_FOR_NULL() \
 do { \
 	if (fcinfo->argnull[0]) \
@@ -112,9 +109,6 @@ static Oid LastTypeId = InvalidOid;
  * variable_ExecutorEnd().
  */
 static HASH_SEQ_STATUS *LastHSeqStatus = NULL;
-
-/* Saved hook values for recall */
-static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
 /* This stack contains lists of changed variables and packages per each subxact level */
 static dlist_head *changesStack = NULL;
@@ -2120,23 +2114,15 @@ pgvTransCallback(XactEvent event, void *arg)
 				break;
 		}
 	}
-}
 
-/*
- * ExecutorEnd hook: clean up hash table sequential scan status
- */
-static void
-variable_ExecutorEnd(QueryDesc *queryDesc)
-{
-	if (LastHSeqStatus)
-	{
-		hash_seq_term(LastHSeqStatus);
-		LastHSeqStatus = NULL;
-	}
-	if (prev_ExecutorEnd)
-		prev_ExecutorEnd(queryDesc);
-	else
-		standard_ExecutorEnd(queryDesc);
+	if (event == XACT_EVENT_PARALLEL_COMMIT || event == XACT_EVENT_COMMIT ||
+		event == XACT_EVENT_PREPARE ||
+		event == XACT_EVENT_PARALLEL_ABORT || event == XACT_EVENT_ABORT)
+		if (LastHSeqStatus)
+		{
+			hash_seq_term(LastHSeqStatus);
+			LastHSeqStatus = NULL;
+		}
 }
 
 /*
@@ -2147,10 +2133,6 @@ _PG_init(void)
 {
 	RegisterXactCallback(pgvTransCallback, NULL);
 	RegisterSubXactCallback(pgvSubTransCallback, NULL);
-
-	/* Install hooks. */
-	prev_ExecutorEnd = ExecutorEnd_hook;
-	ExecutorEnd_hook = variable_ExecutorEnd;
 }
 
 /*
@@ -2161,5 +2143,4 @@ _PG_fini(void)
 {
 	UnregisterXactCallback(pgvTransCallback, NULL);
 	UnregisterSubXactCallback(pgvSubTransCallback, NULL);
-	ExecutorEnd_hook = prev_ExecutorEnd;
 }
