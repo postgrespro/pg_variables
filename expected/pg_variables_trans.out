@@ -1035,7 +1035,7 @@ SELECT pgv_get('vars2', 'any1',NULL::text);
 ROLLBACK TO sp1;
 COMMIT;
 SELECT pgv_get('vars2', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars2"
 SELECT pgv_free();
  pgv_free 
 ----------
@@ -1385,7 +1385,7 @@ SELECT pgv_get('vars2', 'any1',NULL::text);
 
 ROLLBACK;
 SELECT pgv_get('vars2', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars2"
 SELECT pgv_free();
  pgv_free 
 ----------
@@ -1652,7 +1652,7 @@ SELECT pgv_exists('vars', 'any1');
 (1 row)
 
 SELECT pgv_get('vars', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars"
 SELECT * FROM pgv_list() ORDER BY package, name;
  package | name | is_transactional 
 ---------+------+------------------
@@ -1858,7 +1858,7 @@ SELECT pgv_insert('package', 'errs',row(1), true);
 SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
 ERROR:  could not identify a hash function for type unknown
 SELECT pgv_select('vars4', 'r1', 0);
-ERROR:  unrecognized variable "r1"
+ERROR:  unrecognized package "vars4"
 -- If variable created and removed in same transaction level,
 -- it should be totally removed and should not be present
 -- in changes list and cache.
@@ -1878,7 +1878,7 @@ SELECT pgv_remove('vars', 'any1');
 
 RELEASE comm;
 SELECT pgv_get('vars', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars"
 COMMIT;
 SELECT pgv_free();
  pgv_free 

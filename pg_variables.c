@@ -955,6 +955,7 @@ removePackageInternal(Package *package)
 	{
 		MemoryContextDelete(package->hctxRegular);
 		package->hctxRegular = NULL;
+		package->varHashRegular = NULL;
 	}
 
 	/* Add to changes list */
@@ -965,6 +966,17 @@ removePackageInternal(Package *package)
 		addToChangesStack(transObject, TRANS_PACKAGE);
 	}
 	GetActualState(package)->is_valid = false;
+}
+
+static bool
+isPackageEmpty(Package *package)
+{
+	int var_num = hash_get_num_entries(package->varHashTransact);
+
+	if (package->varHashRegular)
+		var_num += hash_get_num_entries(package->varHashRegular);
+
+	return var_num == 0;
 }
 
 /*
@@ -1657,6 +1669,7 @@ removeObject(TransObject *object, TransObjectType type)
 {
 	bool		found;
 	HTAB	   *hash;
+	Package	   *package = NULL;
 
 	/*
 	 * Delete an object from the change history of the overlying
@@ -1666,16 +1679,20 @@ removeObject(TransObject *object, TransObjectType type)
 			removeFromChangesStack(object, type);
 	if (type == TRANS_PACKAGE)
 	{
-		Package    *package = (Package *) object;
+		package = (Package *) object;
 
 		/* Regular variables had already removed */
 		MemoryContextDelete(package->hctxTransact);
 		hash = packagesHash;
 	}
 	else
-		hash = ((Variable *) object)->is_transactional ?
-			   ((Variable *) object)->package->varHashTransact :
-			   ((Variable *) object)->package->varHashRegular;
+	{
+		Variable *var = (Variable *) object;
+		package = var->package;
+		hash = var->is_transactional ?
+			   var->package->varHashTransact :
+			   var->package->varHashRegular;
+	}
 
 	/* Remove all object's states */
 	while (!dlist_is_empty(&object->states))
@@ -1683,6 +1700,12 @@ removeObject(TransObject *object, TransObjectType type)
 
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
+
+	/* Remove package if it is became empty */
+	if (type == TRANS_VARIABLE &&
+		isObjectChangedInCurrentTrans(&package->transObject) &&
+		isPackageEmpty(package))
+		GetActualState(&package->transObject)->is_valid = false;
 
 	resetVariablesCache(true);
 }
@@ -1725,8 +1748,19 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	{
 		if (!state->is_valid)
 		{
-			dlist_pop_head_node(&object->states);
-			pfree(state);
+			if (isPackageEmpty((Package *)object))
+			{
+				removeObject(object, TRANS_PACKAGE);
+				return;
+			}
+
+			if (dlist_has_next(&object->states, &state->node))
+			{
+				dlist_pop_head_node(&object->states);
+				pfree(state);
+			}
+			else
+				state->is_valid = true;
 			/* Restore regular vars HTAB */
 			makePackHTAB((Package *) object, false);
 		}
@@ -1797,6 +1831,13 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 			!dlist_has_next(states, dlist_head_node(states)))
 		{
 			removeObject(object, type);
+			/* Remove package if it becomes empty */
+			if (type == TRANS_VARIABLE)
+			{
+				Package *pack = ((Variable *) object)->package;
+				if (isPackageEmpty(pack))
+					(GetActualState(&pack->transObject))->is_valid = false;
+			}
 			return;
 		}
 	}
