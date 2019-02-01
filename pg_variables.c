@@ -52,7 +52,7 @@ static void getKeyFromName(text *name, char *key);
 static Package *getPackageByName(text *name, bool create, bool strict);
 static Variable *getVariableInternal(Package *package,
 									 text *name, Oid typid,
-									 bool strict);
+									 bool strict, bool type_strict);
 static Variable *createVariableInternal(Package *package,
 										text *name, Oid typid,
 										bool is_transactional);
@@ -197,7 +197,7 @@ variable_get(text *package_name, text *var_name,
 		return 0;
 	}
 
-	variable = getVariableInternal(package, var_name, typid, strict);
+	variable = getVariableInternal(package, var_name, typid, strict, true);
 
 	if (variable == NULL)
 	{
@@ -455,7 +455,7 @@ variable_update(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(var_name), GetName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 		LastVariable = variable;
 	}
 	else
@@ -543,7 +543,7 @@ variable_delete(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(var_name), GetName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 		LastVariable = variable;
 	}
 	else
@@ -592,7 +592,7 @@ variable_select(PG_FUNCTION_ARGS)
 		var_name = PG_GETARG_TEXT_PP(1);
 
 		package = getPackageByName(package_name, false, true);
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 
 		record = &(GetActualValue(variable).record);
 
@@ -667,7 +667,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	}
 
 	package = getPackageByName(package_name, false, true);
-	variable = getVariableInternal(package, var_name, RECORDOID, true);
+	variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 
 	if (!value_is_null)
 		check_record_key(variable, value_type);
@@ -736,7 +736,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		var_name = PG_GETARG_TEXT_PP(1);
 
 		package = getPackageByName(package_name, false, true);
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 
 		check_record_key(variable, ARR_ELEMTYPE(values));
 
@@ -858,12 +858,11 @@ package_exists(PG_FUNCTION_ARGS)
 Datum
 remove_variable(PG_FUNCTION_ARGS)
 {
-	text	   *package_name;
-	text	   *var_name;
-	Package	   *package;
-	Variable   *variable;
-	bool		found;
-	char		key[NAMEDATALEN];
+	text		   *package_name;
+	text		   *var_name;
+	Package		   *package;
+	Variable	   *variable;
+	TransObject	   *transObject;
 
 	CHECK_ARGS_FOR_NULL();
 
@@ -871,30 +870,18 @@ remove_variable(PG_FUNCTION_ARGS)
 	var_name = PG_GETARG_TEXT_PP(1);
 
 	package = getPackageByName(package_name, false, true);
-	getKeyFromName(var_name, key);
+	variable = getVariableInternal(package, var_name, 0, true, false);
 
-	variable = (Variable *) hash_search(package->varHashRegular,
-										key, HASH_REMOVE, &found);
-	if (found)
+	/* Add package to changes list, so we can remove it if it  */
+	if (!isObjectChangedInCurrentTrans(&package->transObject))
 	{
-		/* Regular variable */
-		removeState(&variable->transObject, TRANS_VARIABLE,
-					GetActualState(variable));
+		createSavepoint(&package->transObject, TRANS_PACKAGE);
+		addToChangesStack(&package->transObject, TRANS_PACKAGE);
 	}
-	else
+
+	transObject = &variable->transObject;
+	if (variable->is_transactional)
 	{
-		TransObject *transObject;
-
-		variable = (Variable *) hash_search(package->varHashTransact,
-											key, HASH_FIND, &found);
-		/* Variable doesn't exist in both HTAB */
-		if (!found)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("unrecognized variable \"%s\"", key)));
-
-		/* Transactional variable */
-		transObject = &variable->transObject;
 		if (!isObjectChangedInCurrentTrans(transObject))
 		{
 			createSavepoint(transObject, TRANS_VARIABLE);
@@ -902,6 +889,8 @@ remove_variable(PG_FUNCTION_ARGS)
 		}
 		GetActualState(variable)->is_valid = false;
 	}
+	else
+		removeObject(&variable->transObject, TRANS_VARIABLE);
 
 	resetVariablesCache(false);
 
@@ -1449,7 +1438,8 @@ getPackageByName(text *name, bool create, bool strict)
  * flag 'is_transactional' of this variable is unknown.
  */
 static Variable *
-getVariableInternal(Package *package, text *name, Oid typid, bool strict)
+getVariableInternal(Package *package, text *name, Oid typid, bool strict,
+					bool type_strict)
 {
 	Variable   *variable;
 	char		key[NAMEDATALEN];
@@ -1466,7 +1456,7 @@ getVariableInternal(Package *package, text *name, Oid typid, bool strict)
 	/* Check variable type */
 	if (found)
 	{
-		if (variable->typid != typid)
+		if (type_strict && variable->typid != typid)
 		{
 			char	   *var_type = DatumGetCString(DirectFunctionCall1(regtypeout,
 																	   ObjectIdGetDatum(variable->typid)));
@@ -1574,6 +1564,12 @@ createVariableInternal(Package *package, text *name, Oid typid,
 							&scalar->typbyval);
 			varState->value.scalar.is_null = true;
 		}
+
+		if (!isObjectChangedInCurrentTrans(&package->transObject))
+		{
+			createSavepoint(&package->transObject, TRANS_PACKAGE);
+			addToChangesStack(&package->transObject, TRANS_PACKAGE);
+		}
 	}
 
 	GetActualState(variable)->is_valid = true;
@@ -1675,7 +1671,7 @@ removeObject(TransObject *object, TransObjectType type)
 	 * Delete an object from the change history of the overlying
 	 * transaction level (head of 'changesStack' at this point).
 	 */
-	if (!dlist_is_empty(changesStack))
+	if (changesStack && !dlist_is_empty(changesStack))
 			removeFromChangesStack(object, type);
 	if (type == TRANS_PACKAGE)
 	{
