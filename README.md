@@ -38,6 +38,10 @@ SELECT pgv_get('vars', 'trans_int', NULL::int);
      101
 ```
 
+You can aggregate variables into packages. This is done to be able to have
+variables with different names or to quickly remove the whole batch of
+variables. If the package becomes empty, it is automatically deleted.
+
 ## License
 
 This module available under the [license](LICENSE) similar to
