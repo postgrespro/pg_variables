@@ -672,6 +672,32 @@ SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
  (0,str00)
 (1 row)
 
+-- Clean memory after unsuccessful creation of a variable
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
+ERROR:  could not identify a hash function for type unknown
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+ package 
+---------
+(0 rows)
+
+-- Remove package if it is empty
+SELECT pgv_insert('vars4', 'r2', row(1, 'str1', 'str2'));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_remove('vars4', 'r2');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+ package 
+---------
+(0 rows)
+
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
  package |   name   | is_transactional 

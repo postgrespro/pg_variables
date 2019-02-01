@@ -183,6 +183,15 @@ SELECT pgv_select('vars3', 'r1', 1);
 SELECT pgv_select('vars3', 'r1') LIMIT 2;
 SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
 
+-- Clean memory after unsuccessful creation of a variable
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+
+-- Remove package if it is empty
+SELECT pgv_insert('vars4', 'r2', row(1, 'str1', 'str2'));
+SELECT pgv_remove('vars4', 'r2');
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
 SELECT package FROM pgv_stats() order by package;
