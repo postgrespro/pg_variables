@@ -1696,7 +1696,7 @@ removeObject(TransObject *object, TransObjectType type)
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
 
-	/* Remove package if it is became empty */
+	/* Remove package if it became empty */
 	if (type == TRANS_VARIABLE &&
 		isObjectChangedInCurrentTrans(&package->transObject) &&
 		isPackageEmpty(package))
@@ -1826,7 +1826,7 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 			!dlist_has_next(states, dlist_head_node(states)))
 		{
 			removeObject(object, type);
-			/* Remove package if it becomes empty */
+			/* Remove package if it became empty */
 			if (type == TRANS_VARIABLE)
 			{
 				Package *pack = ((Variable *) object)->package;
