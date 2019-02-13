@@ -1582,36 +1582,24 @@ createVariableInternal(Package *package, text *name, Oid typid,
 static void
 copyValue(VarState *src, VarState *dest, Variable *destVar)
 {
-	MemoryContext oldcxt,
-				destctx;
+	MemoryContext oldcxt;
 
-	destctx = destVar->package->hctxTransact;
-	oldcxt = MemoryContextSwitchTo(destctx);
+	oldcxt = MemoryContextSwitchTo(destVar->package->hctxTransact);
 
 	if (destVar->typid == RECORDOID)
 		/* copy record value */
 	{
-		bool		found;
-		HASH_SEQ_STATUS *rstat;
-		HashRecordEntry *item_prev,
-				   *item_new;
+		HASH_SEQ_STATUS rstat;
+		HashRecordEntry *item_src;
 		RecordVar  *record_src = &src->value.record;
 		RecordVar  *record_dest = &dest->value.record;
 
 		init_record(record_dest, record_src->tupdesc, destVar);
 
 		/* Copy previous history entry into the new one */
-		rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
-		hash_seq_init(rstat, record_src->rhash);
-		while ((item_prev = (HashRecordEntry *) hash_seq_search(rstat)) != NULL)
-		{
-			HashRecordKey k;
-
-			k = item_prev->key;
-			item_new = (HashRecordEntry *) hash_search(record_dest->rhash, &k,
-													   HASH_ENTER, &found);
-			item_new->tuple = heap_copytuple(item_prev->tuple);
-		}
+		hash_seq_init(&rstat, record_src->rhash);
+		while ((item_src = (HashRecordEntry *) hash_seq_search(&rstat)) != NULL)
+			copy_record(record_dest, item_src->tuple, destVar);
 	}
 	else
 		/* copy scalar value */

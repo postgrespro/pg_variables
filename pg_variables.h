@@ -151,6 +151,8 @@ typedef struct ChangesStackNode
 extern void init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable);
 extern void check_attributes(Variable *variable, TupleDesc tupdesc);
 extern void check_record_key(Variable *variable, Oid typid);
+extern void copy_record(RecordVar *dest_record, HeapTuple src_tuple,
+						Variable *variable);
 
 extern void insert_record(Variable *variable, HeapTupleHeader tupleHeader);
 extern bool update_record(Variable *variable, HeapTupleHeader tupleHeader);

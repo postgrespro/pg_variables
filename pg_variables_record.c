@@ -154,6 +154,47 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 }
 
 /*
+ * Copy record using src_tuple.
+ */
+void
+copy_record(RecordVar *dest_record, HeapTuple src_tuple, Variable *variable)
+{
+	HeapTuple	tuple;
+	Datum		value;
+	bool		isnull;
+	HashRecordKey k;
+	HashRecordEntry *item;
+	bool		found;
+	MemoryContext oldcxt;
+
+	oldcxt = MemoryContextSwitchTo(dest_record->hctx);
+
+	/* Inserting a new record into dest_record */
+	tuple = heap_copytuple(src_tuple);
+	value = fastgetattr(tuple, 1, dest_record->tupdesc, &isnull);
+
+	k.value = value;
+	k.is_null = isnull;
+	k.hash_proc = &dest_record->hash_proc;
+	k.cmp_proc = &dest_record->cmp_proc;
+
+	item = (HashRecordEntry *) hash_search(dest_record->rhash, &k,
+										   HASH_ENTER, &found);
+	if (found)
+	{
+		heap_freetuple(tuple);
+		MemoryContextSwitchTo(oldcxt);
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("there is a record in the variable \"%s\" with same "
+						"key", GetName(variable))));
+	}
+	item->tuple = tuple;
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
  * New record structure should be the same as the first record.
  */
 void
