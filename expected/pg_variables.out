@@ -583,12 +583,16 @@ SELECT pgv_update('vars3', 'r1', row(3, 'str22'::varchar));
  f
 (1 row)
 
+SELECT pgv_update('vars4', 'r1', row(3, 'str22'::varchar)); -- fail
+ERROR:  unrecognized package "vars4"
 select pgv_delete('vars3', 'r2', NULL::int);
  pgv_delete 
 ------------
  f
 (1 row)
 
+select pgv_delete('vars4', 'r2', NULL::int); -- fail
+ERROR:  unrecognized package "vars4"
 -- Test NULL values
 SELECT pgv_insert('vars3', 'r2', NULL); -- fail
 ERROR:  record argument can not be NULL
