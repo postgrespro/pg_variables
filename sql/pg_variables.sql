@@ -164,7 +164,9 @@ SELECT pgv_select('vars3', 'r1', ARRAY[[1,2]]); -- fail
 -- Test variables caching
 SELECT pgv_insert('vars3', 'r2', row(1, 'str1', 'str2'));
 SELECT pgv_update('vars3', 'r1', row(3, 'str22'::varchar));
+SELECT pgv_update('vars4', 'r1', row(3, 'str22'::varchar)); -- fail
 select pgv_delete('vars3', 'r2', NULL::int);
+select pgv_delete('vars4', 'r2', NULL::int); -- fail
 
 -- Test NULL values
 SELECT pgv_insert('vars3', 'r2', NULL); -- fail

@@ -1,0 +1,24 @@
+*** /home/artur/source/pg/pg_variables/expected/pg_variables.out	2019-02-13 17:46:10.430008139 +0300
+--- /home/artur/source/pg/pg_variables/results/pg_variables.out	2019-02-13 18:14:44.927663951 +0300
+***************
+*** 583,594 ****
+--- 583,598 ----
+   f
+  (1 row)
+  
++ SELECT pgv_update('vars4', 'r1', row(3, 'str22'::varchar)); -- fail
++ ERROR:  unrecognized package "vars4"
+  select pgv_delete('vars3', 'r2', NULL::int);
+   pgv_delete 
+  ------------
+   f
+  (1 row)
+  
++ select pgv_delete('vars4', 'r2', NULL::int); -- fail
++ ERROR:  unrecognized package "vars4"
+  -- Test NULL values
+  SELECT pgv_insert('vars3', 'r2', NULL); -- fail
+  ERROR:  record argument can not be NULL
+
+======================================================================
+

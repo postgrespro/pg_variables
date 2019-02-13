@@ -1,0 +1,3 @@
+test pg_variables                 ... FAILED
+test pg_variables_any             ... ok
+test pg_variables_trans           ... ok
