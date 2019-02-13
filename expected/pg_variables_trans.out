@@ -1880,6 +1880,34 @@ RELEASE comm;
 SELECT pgv_get('vars', 'any1',NULL::text);
 ERROR:  unrecognized package "vars"
 COMMIT;
+-- Test for PGPRO-2440
+SELECT pgv_insert('vars3', 'r3', row(1 :: integer, NULL::varchar), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+BEGIN;
+SELECT pgv_insert('vars3', 'r3', row(2 :: integer, NULL::varchar), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SAVEPOINT comm;
+SELECT pgv_insert('vars3', 'r3', row(3 :: integer, NULL::varchar), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+COMMIT;
+SELECT pgv_delete('vars3', 'r3', 3);
+ pgv_delete 
+------------
+ t
+(1 row)
+
 SELECT pgv_free();
  pgv_free 
 ----------

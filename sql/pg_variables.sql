@@ -1,5 +1,12 @@
 CREATE EXTENSION pg_variables;
 
+-- Test packages - sanity checks
+SELECT pgv_free();
+SELECT pgv_exists(NULL); -- fail
+SELECT pgv_remove(NULL); -- fail
+SELECT pgv_remove('vars'); -- fail
+SELECT pgv_exists('vars111111111111111111111111111111111111111111111111111111111111'); -- fail
+
 -- Integer variables
 SELECT pgv_get_int('vars', 'int1');
 SELECT pgv_get_int('vars', 'int1', false);
@@ -152,6 +159,17 @@ SELECT pgv_insert('vars3', 'r1', tab) FROM tab;
 SELECT pgv_insert('vars3', 'r1', row(1, 'str1', 'str2'));
 SELECT pgv_insert('vars3', 'r1', row(1, 1));
 SELECT pgv_insert('vars3', 'r1', row('str1', 'str1'));
+SELECT pgv_select('vars3', 'r1', ARRAY[[1,2]]); -- fail
+
+-- Test variables caching
+SELECT pgv_insert('vars3', 'r2', row(1, 'str1', 'str2'));
+SELECT pgv_update('vars3', 'r2', row(1, 'str2', 'str1'));
+
+-- Test NULL values
+SELECT pgv_insert('vars3', 'r2', NULL); -- fail
+SELECT pgv_update('vars3', 'r2', NULL); -- fail
+select pgv_delete('vars3', 'r2', NULL::int);
+SELECT pgv_select('vars3', 'r1', NULL::int[]); -- fail
 
 SELECT pgv_select('vars3', 'r1');
 SELECT pgv_select('vars3', 'r1', 1);

@@ -482,4 +482,13 @@ RELEASE comm;
 SELECT pgv_get('vars', 'any1',NULL::text);
 COMMIT;
 
+-- Test for PGPRO-2440
+SELECT pgv_insert('vars3', 'r3', row(1 :: integer, NULL::varchar), true);
+BEGIN;
+SELECT pgv_insert('vars3', 'r3', row(2 :: integer, NULL::varchar), true);
+SAVEPOINT comm;
+SELECT pgv_insert('vars3', 'r3', row(3 :: integer, NULL::varchar), true);
+COMMIT;
+SELECT pgv_delete('vars3', 'r3', 3);
+
 SELECT pgv_free();
