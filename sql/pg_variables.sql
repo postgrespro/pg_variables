@@ -163,7 +163,8 @@ SELECT pgv_select('vars3', 'r1', ARRAY[[1,2]]); -- fail
 
 -- Test variables caching
 SELECT pgv_insert('vars3', 'r2', row(1, 'str1', 'str2'));
-SELECT pgv_update('vars3', 'r2', row(1, 'str2', 'str1'));
+SELECT pgv_update('vars3', 'r1', row(3, 'str22'::varchar));
+select pgv_delete('vars3', 'r2', NULL::int);
 
 -- Test NULL values
 SELECT pgv_insert('vars3', 'r2', NULL); -- fail
@@ -173,12 +174,14 @@ SELECT pgv_select('vars3', 'r1', NULL::int[]); -- fail
 
 SELECT pgv_select('vars3', 'r1');
 SELECT pgv_select('vars3', 'r1', 1);
+SELECT pgv_select('vars3', 'r1', 1::float); -- fail
 SELECT pgv_select('vars3', 'r1', 0);
 SELECT pgv_select('vars3', 'r1', NULL::int);
 SELECT pgv_select('vars3', 'r1', ARRAY[1, 0, NULL]);
 
 UPDATE tab SET t = 'str33' WHERE id = 1;
 SELECT pgv_update('vars3', 'r1', tab) FROM tab;
+SELECT pgv_update('vars3', 'r1', row(4, 'str44'::varchar));
 SELECT pgv_select('vars3', 'r1');
 
 SELECT pgv_delete('vars3', 'r1', 1);

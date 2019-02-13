@@ -918,15 +918,7 @@ remove_package(PG_FUNCTION_ARGS)
 	package_name = PG_GETARG_TEXT_PP(0);
 
 	package = getPackageByName(package_name, false, true);
-	if (package)
-		removePackageInternal(package);
-	else
-	{
-		getKeyFromName(package_name, key);
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("unrecognized package \"%s\"", key)));
-	}
+	removePackageInternal(package);
 
 	resetVariablesCache(true);
 

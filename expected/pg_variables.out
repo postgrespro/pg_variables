@@ -577,10 +577,16 @@ SELECT pgv_insert('vars3', 'r2', row(1, 'str1', 'str2'));
  
 (1 row)
 
-SELECT pgv_update('vars3', 'r2', row(1, 'str2', 'str1'));
+SELECT pgv_update('vars3', 'r1', row(3, 'str22'::varchar));
  pgv_update 
 ------------
- t
+ f
+(1 row)
+
+select pgv_delete('vars3', 'r2', NULL::int);
+ pgv_delete 
+------------
+ f
 (1 row)
 
 -- Test NULL values
@@ -611,6 +617,8 @@ SELECT pgv_select('vars3', 'r1', 1);
  (1,str11)
 (1 row)
 
+SELECT pgv_select('vars3', 'r1', 1::float); -- fail
+ERROR:  requested value type differs from variable "r1" key type
 SELECT pgv_select('vars3', 'r1', 0);
  pgv_select 
 ------------
@@ -640,6 +648,12 @@ SELECT pgv_update('vars3', 'r1', tab) FROM tab;
  t
  t
 (4 rows)
+
+SELECT pgv_update('vars3', 'r1', row(4, 'str44'::varchar));
+ pgv_update 
+------------
+ f
+(1 row)
 
 SELECT pgv_select('vars3', 'r1');
  pgv_select 
