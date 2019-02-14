@@ -215,6 +215,16 @@ SELECT pgv_insert('vars4', 'r2', row(1, 'str1', 'str2'));
 SELECT pgv_remove('vars4', 'r2');
 SELECT package FROM pgv_stats() WHERE package = 'vars4';
 
+-- Record variables as scalar
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'));
+SELECT pgv_get('vars5', 'r1', NULL::record);
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'), true); -- fail
+
+SELECT pgv_insert('vars5', 'r1', row(1, 'str11')); -- fail
+SELECT pgv_select('vars5', 'r1'); -- fail
+
+SELECT pgv_get('vars3', 'r1', NULL::record); -- fail
+
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
 SELECT package FROM pgv_stats() order by package;

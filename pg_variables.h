@@ -101,6 +101,11 @@ typedef struct Variable
 	TransObject transObject;
 	Package    *package;
 	Oid			typid;
+	/*
+	 * We need an additional flag to determine variable's type since we can
+	 * store record type DATUM within scalar variable
+	 */
+	bool		is_record;
 
 	/*
 	 * The flag determines the further behavior of the variable. Can be

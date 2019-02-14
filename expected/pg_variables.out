@@ -759,6 +759,27 @@ SELECT package FROM pgv_stats() WHERE package = 'vars4';
 ---------
 (0 rows)
 
+-- Record variables as scalar
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'));
+ pgv_set 
+---------
+ 
+(1 row)
+
+SELECT pgv_get('vars5', 'r1', NULL::record);
+  pgv_get  
+-----------
+ (1,str11)
+(1 row)
+
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'), true); -- fail
+ERROR:  variable "r1" already created as NOT TRANSACTIONAL
+SELECT pgv_insert('vars5', 'r1', row(1, 'str11')); -- fail
+ERROR:  "r1" isn't a record variable
+SELECT pgv_select('vars5', 'r1'); -- fail
+ERROR:  "r1" isn't a record variable
+SELECT pgv_get('vars3', 'r1', NULL::record); -- fail
+ERROR:  "r1" isn't a scalar variable
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
  package |   name   | is_transactional 
@@ -786,7 +807,8 @@ SELECT * FROM pgv_list() order by package, name;
  vars2   | j2       | f
  vars3   | r1       | f
  vars3   | r2       | f
-(23 rows)
+ vars5   | r1       | f
+(24 rows)
 
 SELECT package FROM pgv_stats() order by package;
  package 
@@ -794,7 +816,8 @@ SELECT package FROM pgv_stats() order by package;
  vars
  vars2
  vars3
-(3 rows)
+ vars5
+(4 rows)
 
 SELECT pgv_remove('vars', 'int3');
 ERROR:  unrecognized variable "int3"
@@ -849,7 +872,8 @@ SELECT * FROM pgv_list() order by package, name;
  vars    | tstzNULL | f
  vars3   | r1       | f
  vars3   | r2       | f
-(20 rows)
+ vars5   | r1       | f
+(21 rows)
 
 SELECT pgv_free();
  pgv_free 

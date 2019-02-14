@@ -50,12 +50,10 @@ static void ensurePackagesHashExists(void);
 static void getKeyFromName(text *name, char *key);
 
 static Package *getPackageByName(text *name, bool create, bool strict);
-static Variable *getVariableInternal(Package *package,
-									 text *name, Oid typid,
-									 bool strict);
-static Variable *createVariableInternal(Package *package,
-										text *name, Oid typid,
-										bool is_transactional);
+static Variable *getVariableInternal(Package *package, text *name,
+									 Oid typid, bool is_record, bool strict);
+static Variable *createVariableInternal(Package *package, text *name, Oid typid,
+										bool is_record, bool is_transactional);
 static void removePackageInternal(Package *package);
 static void resetVariablesCache(bool with_package);
 
@@ -65,7 +63,7 @@ static void releaseSavepoint(TransObject *object, TransObjectType type);
 static void rollbackSavepoint(TransObject *object, TransObjectType type);
 
 static void copyValue(VarState *src, VarState *dest, Variable *destVar);
-static void freeValue(VarState *varstate, Oid typid);
+static void freeValue(VarState *varstate, bool is_record);
 static void removeState(TransObject *object, TransObjectType type,
 						TransState *stateToDelete);
 static bool isObjectChangedInCurrentTrans(TransObject *object);
@@ -160,7 +158,7 @@ variable_set(text *package_name, text *var_name,
 	ScalarVar  *scalar;
 
 	package = getPackageByName(package_name, true, false);
-	variable = createVariableInternal(package, var_name, typid,
+	variable = createVariableInternal(package, var_name, typid, false,
 									  is_transactional);
 
 	scalar = &(GetActualValue(variable).scalar);
@@ -197,7 +195,7 @@ variable_get(text *package_name, text *var_name,
 		return 0;
 	}
 
-	variable = getVariableInternal(package, var_name, typid, strict);
+	variable = getVariableInternal(package, var_name, typid, false, strict);
 
 	if (variable == NULL)
 	{
@@ -343,7 +341,7 @@ variable_insert(PG_FUNCTION_ARGS)
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
 		variable = createVariableInternal(package, var_name, RECORDOID,
-										  is_transactional);
+										  true, is_transactional);
 		LastVariable = variable;
 	}
 	else
@@ -455,7 +453,8 @@ variable_update(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(var_name), GetName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true,
+									   true);
 		LastVariable = variable;
 	}
 	else
@@ -543,7 +542,8 @@ variable_delete(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(var_name), GetName(LastVariable),
 				VARSIZE_ANY_EXHDR(var_name)) != 0)
 	{
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true,
+									   true);
 		LastVariable = variable;
 	}
 	else
@@ -592,7 +592,8 @@ variable_select(PG_FUNCTION_ARGS)
 		var_name = PG_GETARG_TEXT_PP(1);
 
 		package = getPackageByName(package_name, false, true);
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true,
+									   true);
 
 		record = &(GetActualValue(variable).record);
 
@@ -667,7 +668,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	}
 
 	package = getPackageByName(package_name, false, true);
-	variable = getVariableInternal(package, var_name, RECORDOID, true);
+	variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 
 	if (!value_is_null)
 		check_record_key(variable, value_type);
@@ -736,7 +737,8 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		var_name = PG_GETARG_TEXT_PP(1);
 
 		package = getPackageByName(package_name, false, true);
-		variable = getVariableInternal(package, var_name, RECORDOID, true);
+		variable = getVariableInternal(package, var_name, RECORDOID, true,
+									   true);
 
 		check_record_key(variable, ARR_ELEMTYPE(values));
 
@@ -870,7 +872,7 @@ remove_variable(PG_FUNCTION_ARGS)
 	var_name = PG_GETARG_TEXT_PP(1);
 
 	package = getPackageByName(package_name, false, true);
-	variable = getVariableInternal(package, var_name, InvalidOid, true);
+	variable = getVariableInternal(package, var_name, InvalidOid, false, true);
 
 	/* Add package to changes list, so we can remove it if it is empty */
 	if (!isObjectChangedInCurrentTrans(&package->transObject))
@@ -908,7 +910,6 @@ remove_package(PG_FUNCTION_ARGS)
 {
 	Package	   *package;
 	text	   *package_name;
-	char		key[NAMEDATALEN];
 
 	if (PG_ARGISNULL(0))
 		ereport(ERROR,
@@ -1430,7 +1431,8 @@ getPackageByName(text *name, bool create, bool strict)
  * flag 'is_transactional' of this variable is unknown.
  */
 static Variable *
-getVariableInternal(Package *package, text *name, Oid typid, bool strict)
+getVariableInternal(Package *package, text *name, Oid typid, bool is_record,
+					bool strict)
 {
 	Variable   *variable;
 	char		key[NAMEDATALEN];
@@ -1447,15 +1449,25 @@ getVariableInternal(Package *package, text *name, Oid typid, bool strict)
 	/* Check variable type */
 	if (found)
 	{
-		if (typid != InvalidOid && variable->typid != typid)
+		if (typid != InvalidOid)
 		{
-			char	   *var_type = DatumGetCString(DirectFunctionCall1(regtypeout,
-																	   ObjectIdGetDatum(variable->typid)));
+			if (variable->typid != typid)
+			{
+				char	   *var_type = DatumGetCString(
+										DirectFunctionCall1(regtypeout,
+											ObjectIdGetDatum(variable->typid)));
 
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("variable \"%s\" requires \"%s\" value",
-							key, var_type)));
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("variable \"%s\" requires \"%s\" value",
+								key, var_type)));
+			}
+
+			if (variable->is_record != is_record)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("\"%s\" isn't a %s variable",
+								key, is_record ? "record" : "scalar")));
 		}
 		if (!GetActualState(variable)->is_valid && strict)
 			ereport(ERROR,
@@ -1475,11 +1487,11 @@ getVariableInternal(Package *package, text *name, Oid typid, bool strict)
 
 /*
  * Create a variable or return a pointer to existing one.
- * Function is useful to set new value to variable and
- * flag 'is_transactional' is known.
+ * Function is useful to set new value to variable and flag 'is_transactional'
+ * is known.
  */
 static Variable *
-createVariableInternal(Package *package, text *name, Oid typid,
+createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 					   bool is_transactional)
 {
 	Variable   *variable;
@@ -1521,6 +1533,12 @@ createVariableInternal(Package *package, text *name, Oid typid,
 							key, var_type)));
 		}
 
+		if (variable->is_record != is_record)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("\"%s\" isn't a %s variable",
+					 		key, is_record ? "record" : "scalar")));
+
 		/*
 		 * Savepoint must be created when variable changed in current
 		 * transaction. For each transaction level there should be a
@@ -1540,6 +1558,7 @@ createVariableInternal(Package *package, text *name, Oid typid,
 		/* Variable entry was created, so initialize new variable. */
 		variable->typid = typid;
 		variable->package = package;
+		variable->is_record = is_record;
 		variable->is_transactional = is_transactional;
 
 		dlist_init(GetStateStorage(variable));
@@ -1547,7 +1566,7 @@ createVariableInternal(Package *package, text *name, Oid typid,
 										  sizeof(VarState));
 
 		dlist_push_head(GetStateStorage(variable), &varState->state.node);
-		if (typid != RECORDOID)
+		if (!variable->is_record)
 		{
 			ScalarVar  *scalar = &(varState->value.scalar);
 
@@ -1578,7 +1597,7 @@ copyValue(VarState *src, VarState *dest, Variable *destVar)
 
 	oldcxt = MemoryContextSwitchTo(destVar->package->hctxTransact);
 
-	if (destVar->typid == RECORDOID)
+	if (destVar->is_record)
 		/* copy record value */
 	{
 		HASH_SEQ_STATUS rstat;
@@ -1610,19 +1629,17 @@ copyValue(VarState *src, VarState *dest, Variable *destVar)
 }
 
 static void
-freeValue(VarState *varstate, Oid typid)
+freeValue(VarState *varstate, bool is_record)
 {
-	if (typid == RECORDOID && varstate->value.record.hctx)
+	if (is_record && varstate->value.record.hctx)
 	{
 		/* All records will be freed */
 		MemoryContextDelete(varstate->value.record.hctx);
 	}
-	else if (varstate->value.scalar.typbyval == false &&
+	else if (!is_record && varstate->value.scalar.typbyval == false &&
 			 varstate->value.scalar.is_null == false &&
 			 varstate->value.scalar.value)
-	{
 		pfree(DatumGetPointer(varstate->value.scalar.value));
-	}
 }
 
 static void
@@ -1632,7 +1649,7 @@ removeState(TransObject *object, TransObjectType type, TransState *stateToDelete
 	{
 		Variable   *var = (Variable *) object;
 
-		freeValue((VarState *) stateToDelete, var->typid);
+		freeValue((VarState *) stateToDelete, var->is_record);
 	}
 	dlist_delete(&stateToDelete->node);
 	pfree(stateToDelete);
