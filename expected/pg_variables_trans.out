@@ -1794,7 +1794,8 @@ SELECT package FROM pgv_stats() ORDER BY package;
  package 
 ---------
  vars
-(1 row)
+ vars2
+(2 rows)
 
 SELECT * FROM pgv_list() ORDER BY package, name;
  package | name | is_transactional 

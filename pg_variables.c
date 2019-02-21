@@ -49,7 +49,8 @@ extern void _PG_fini(void);
 static void ensurePackagesHashExists(void);
 static void getKeyFromName(text *name, char *key);
 
-static Package *getPackageByName(text *name, bool create, bool strict);
+static Package *getPackage(text *name, bool strict);
+static Package *createPackage(text *name, bool is_trans);
 static Variable *getVariableInternal(Package *package, text *name,
 									 Oid typid, bool is_record, bool strict);
 static Variable *createVariableInternal(Package *package, text *name, Oid typid,
@@ -157,7 +158,7 @@ variable_set(text *package_name, text *var_name,
 	Variable   *variable;
 	ScalarVar  *scalar;
 
-	package = getPackageByName(package_name, true, false);
+	package = createPackage(package_name, is_transactional);
 	variable = createVariableInternal(package, var_name, typid, false,
 									  is_transactional);
 
@@ -188,7 +189,7 @@ variable_get(text *package_name, text *var_name,
 	Variable   *variable;
 	ScalarVar  *scalar;
 
-	package = getPackageByName(package_name, false, strict);
+	package = getPackage(package_name, strict);
 	if (package == NULL)
 	{
 		*is_null = true;
@@ -325,9 +326,10 @@ variable_insert(PG_FUNCTION_ARGS)
 	if (LastPackage == NULL ||
 		VARSIZE_ANY_EXHDR(package_name) != strlen(GetName(LastPackage)) ||
 		strncmp(VARDATA_ANY(package_name), GetName(LastPackage),
-				VARSIZE_ANY_EXHDR(package_name)) != 0)
+				VARSIZE_ANY_EXHDR(package_name)) != 0 ||
+		!pack_htab(LastPackage, is_transactional))
 	{
-		package = getPackageByName(package_name, true, false);
+		package = createPackage(package_name, is_transactional);
 		LastPackage = package;
 		LastVariable = NULL;
 	}
@@ -440,7 +442,7 @@ variable_update(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(package_name), GetName(LastPackage),
 				VARSIZE_ANY_EXHDR(package_name)) != 0)
 	{
-		package = getPackageByName(package_name, false, true);
+		package = getPackage(package_name, true);
 		LastPackage = package;
 		LastVariable = NULL;
 	}
@@ -529,7 +531,7 @@ variable_delete(PG_FUNCTION_ARGS)
 		strncmp(VARDATA_ANY(package_name), GetName(LastPackage),
 				VARSIZE_ANY_EXHDR(package_name)) != 0)
 	{
-		package = getPackageByName(package_name, false, true);
+		package = getPackage(package_name, true);
 		LastPackage = package;
 		LastVariable = NULL;
 	}
@@ -591,7 +593,7 @@ variable_select(PG_FUNCTION_ARGS)
 		package_name = PG_GETARG_TEXT_PP(0);
 		var_name = PG_GETARG_TEXT_PP(1);
 
-		package = getPackageByName(package_name, false, true);
+		package = getPackage(package_name, true);
 		variable = getVariableInternal(package, var_name, RECORDOID, true,
 									   true);
 
@@ -667,7 +669,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 		value = 0;
 	}
 
-	package = getPackageByName(package_name, false, true);
+	package = getPackage(package_name, true);
 	variable = getVariableInternal(package, var_name, RECORDOID, true, true);
 
 	if (!value_is_null)
@@ -736,7 +738,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		package_name = PG_GETARG_TEXT_PP(0);
 		var_name = PG_GETARG_TEXT_PP(1);
 
-		package = getPackageByName(package_name, false, true);
+		package = getPackage(package_name, true);
 		variable = getVariableInternal(package, var_name, RECORDOID, true,
 									   true);
 
@@ -802,14 +804,14 @@ variable_exists(PG_FUNCTION_ARGS)
 	Package	   *package;
 	Variable   *variable;
 	char		key[NAMEDATALEN];
-	bool		found;
+	bool		found = false;
 
 	CHECK_ARGS_FOR_NULL();
 
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
 
-	package = getPackageByName(package_name, false, false);
+	package = getPackage(package_name, false);
 	if (package == NULL)
 	{
 		PG_FREE_IF_COPY(package_name, 0);
@@ -820,9 +822,10 @@ variable_exists(PG_FUNCTION_ARGS)
 
 	getKeyFromName(var_name, key);
 
-	variable = (Variable *) hash_search(package->varHashRegular,
-										key, HASH_FIND, &found);
-	if (!found)
+	if (package->varHashRegular)
+		variable = (Variable *) hash_search(package->varHashRegular,
+											key, HASH_FIND, &found);
+	if (!found && package->varHashTransact)
 		variable = (Variable *) hash_search(package->varHashTransact,
 											key, HASH_FIND, &found);
 
@@ -848,7 +851,7 @@ package_exists(PG_FUNCTION_ARGS)
 
 	package_name = PG_GETARG_TEXT_PP(0);
 
-	res = getPackageByName(package_name, false, false) != NULL;
+	res = getPackage(package_name, false) != NULL;
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_BOOL(res);
@@ -871,7 +874,7 @@ remove_variable(PG_FUNCTION_ARGS)
 	package_name = PG_GETARG_TEXT_PP(0);
 	var_name = PG_GETARG_TEXT_PP(1);
 
-	package = getPackageByName(package_name, false, true);
+	package = getPackage(package_name, true);
 	variable = getVariableInternal(package, var_name, InvalidOid, false, true);
 
 	/* Add package to changes list, so we can remove it if it is empty */
@@ -918,7 +921,7 @@ remove_package(PG_FUNCTION_ARGS)
 
 	package_name = PG_GETARG_TEXT_PP(0);
 
-	package = getPackageByName(package_name, false, true);
+	package = getPackage(package_name, true);
 	removePackageInternal(package);
 
 	resetVariablesCache(true);
@@ -953,7 +956,10 @@ removePackageInternal(Package *package)
 static bool
 isPackageEmpty(Package *package)
 {
-	int var_num = hash_get_num_entries(package->varHashTransact);
+	int var_num = 0;
+	
+	if (package->varHashTransact)
+		var_num += hash_get_num_entries(package->varHashTransact);
 
 	if (package->varHashRegular)
 		var_num += hash_get_num_entries(package->varHashRegular);
@@ -1065,8 +1071,10 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 				/* Get variables list for package */
 				for (i = 0; i < 2; i++)
 				{
-					hash_seq_init(&vstat, i ? package->varHashTransact :
-								  package->varHashRegular);
+					HTAB *htab = pack_htab(package, i);
+					if (!htab)
+						continue;
+					hash_seq_init(&vstat, htab);
 					while ((variable =
 							(Variable *) hash_seq_search(&vstat)) != NULL)
 					{
@@ -1228,9 +1236,10 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		/* Fill data */
 		values[0] = PointerGetDatum(cstring_to_text(GetName(package)));
 
-		if (GetActualState(package)->is_valid)
+		if (package->hctxRegular)
 			getMemoryTotalSpace(package->hctxRegular, 0, &regularSpace);
-		getMemoryTotalSpace(package->hctxTransact, 0, &transactSpace);
+		if (package->hctxTransact)
+			getMemoryTotalSpace(package->hctxTransact, 0, &transactSpace);
 
 		totalSpace = regularSpace + transactSpace;
 		values[1] = Int64GetDatum(totalSpace);
@@ -1300,6 +1309,7 @@ makePackHTAB(Package *package, bool is_trans)
 	HTAB		  **htab;
 	MemoryContext  *context;
 
+	// maybe we should use macro pack_hctx?
 	htab = is_trans ? &package->varHashTransact : &package->varHashRegular;
 	context = is_trans ? &package->hctxTransact : &package->hctxRegular;
 
@@ -1317,40 +1327,48 @@ makePackHTAB(Package *package, bool is_trans)
 }
 
 static Package *
-getPackageByName(text *name, bool create, bool strict)
+getPackage(text *name, bool strict)
 {
 	Package	   *package;
-	PackState  *packState;
 	char		key[NAMEDATALEN];
 	bool		found;
 
 	getKeyFromName(name, key);
 
-	if (create)
-		ensurePackagesHashExists();
-	else
+	/* Find a package entry */
+	if (packagesHash)
 	{
-		if (!packagesHash)
-		{
-			if (strict)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("unrecognized package \"%s\"", key)));
+		package = (Package *) hash_search(packagesHash, key, HASH_FIND, &found);
 
-			return NULL;
-		}
+		if (found && GetActualState(package)->is_valid)
+			return package;
 	}
+	/* Package not found or it's current state is "invalid" */
+	if (strict)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("unrecognized package \"%s\"", key)));
+
+	return NULL;
+}
+
+static Package *
+createPackage(text *name, bool is_trans)
+{
+	Package	   *package;
+	char		key[NAMEDATALEN];
+	bool		found;
+
+	getKeyFromName(name, key);
+	ensurePackagesHashExists();
 
 	/* Find or create a package entry */
-	package = (Package *) hash_search(packagesHash, key,
-									  create ? HASH_ENTER : HASH_FIND,
-									  &found);
+	package = (Package *) hash_search(packagesHash, key, HASH_ENTER, &found);
 
 	if (found)
 	{
-		if (GetActualState(package)->is_valid)
-			return package;
-		else if (create)
+		if (!GetActualState(package)->is_valid)
+		/* Make package valid again */
 		{
 			HASH_SEQ_STATUS vstat;
 			Variable   *variable;
@@ -1358,71 +1376,57 @@ getPackageByName(text *name, bool create, bool strict)
 
 			/* Make new history entry of package */
 			if (!isObjectChangedInCurrentTrans(transObj))
-			{
 				createSavepoint(transObj, TRANS_PACKAGE);
-				addToChangesStack(transObj, TRANS_PACKAGE);
-			}
 
 			GetActualState(package)->is_valid = true;
 
-			/* XXX Check is this necessary */
-
-			/* Restore previously removed HTAB for regular variables */
-			makePackHTAB(package, false);
-
 			/* Mark all transactional variables in package as removed */
-			hash_seq_init(&vstat, package->varHashTransact);
-			while ((variable =
-					(Variable *) hash_seq_search(&vstat)) != NULL)
+			if (package->varHashTransact)
 			{
-				transObj = &variable->transObject;
-
-				if (!isObjectChangedInCurrentTrans(transObj))
+				hash_seq_init(&vstat, package->varHashTransact);
+				while ((variable =
+						(Variable *) hash_seq_search(&vstat)) != NULL)
 				{
-					createSavepoint(transObj, TRANS_VARIABLE);
-					addToChangesStack(transObj, TRANS_VARIABLE);
-				}
-				GetActualState(variable)->is_valid = false;
-			}
+					transObj = &variable->transObject;
 
-			return package;
+					if (!isObjectChangedInCurrentTrans(transObj))
+					{
+						createSavepoint(transObj, TRANS_VARIABLE);
+						addToChangesStack(transObj, TRANS_VARIABLE);
+					}
+					GetActualState(variable)->is_valid = false;
+				}
+			}
 		}
-		else if (strict)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("unrecognized package \"%s\"", key)));
-		else
-			return NULL;
-	}
-	else if (!create)
-	{
-		if (strict)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("unrecognized package \"%s\"", key)));
-		else
-			return package;
 	}
 	else
 	{
-		/*
-		 * Package entry was created, so we need create hash table for
-		 * variables.
-		 */
-		makePackHTAB(package, false);
-		makePackHTAB(package, true);
+		PackState  *packState;
 
+		//memset(package, 0, sizeof(Package));
+		package->varHashRegular = NULL;
+		package->varHashTransact = NULL;
+		package->hctxRegular = NULL;
+		package->hctxTransact = NULL;
 		/* Initialize history */
 		dlist_init(GetStateStorage(package));
 		packState = MemoryContextAllocZero(ModuleContext, sizeof(PackState));
 		dlist_push_head(GetStateStorage(package), &(packState->state.node));
 		packState->state.is_valid = true;
-
-		/* Add to changes list */
-		addToChangesStack(&package->transObject, TRANS_PACKAGE);
-
-		return package;
 	}
+
+	/* Create corresponding HTAB if not exists */
+	if (!pack_htab(package, is_trans))
+		makePackHTAB(package, is_trans);
+	/* Add to changes list */
+	//addToChangesStack(&package->transObject, TRANS_PACKAGE);
+	if (!isObjectChangedInCurrentTrans(&package->transObject))
+	{
+		createSavepoint(&package->transObject, TRANS_PACKAGE);
+		addToChangesStack(&package->transObject, TRANS_PACKAGE);
+	}
+
+	return package;
 }
 
 /*
@@ -1434,15 +1438,16 @@ static Variable *
 getVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 					bool strict)
 {
-	Variable   *variable;
+	Variable   *variable = NULL;
 	char		key[NAMEDATALEN];
-	bool		found;
+	bool		found = false;
 
 	getKeyFromName(name, key);
 
-	variable = (Variable *) hash_search(package->varHashRegular,
-										key, HASH_FIND, &found);
-	if (!found)
+	if (package->varHashRegular)
+		variable = (Variable *) hash_search(package->varHashRegular,
+											key, HASH_FIND, &found);
+	if (!found && package->varHashTransact)
 		variable = (Variable *) hash_search(package->varHashTransact,
 											key, HASH_FIND, &found);
 
@@ -1496,6 +1501,7 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 {
 	Variable   *variable;
 	TransObject *transObject;
+	HTAB	   *htab;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -1505,14 +1511,16 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 	 * Reverse check: for non-transactional variable search in regular table
 	 * and vice versa.
 	 */
-	hash_search(is_transactional ?
-				package->varHashRegular : package->varHashTransact,
-				key, HASH_FIND, &found);
-	if (found)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
-						key, is_transactional ? "NOT " : "")));
+	htab = pack_htab(package, !is_transactional);
+	if (htab)
+	{
+		hash_search(htab, key, HASH_FIND, &found);
+		if (found)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
+							key, is_transactional ? "NOT " : "")));
+	}
 
 	variable = (Variable *) hash_search(pack_htab(package, is_transactional),
 										key, HASH_ENTER, &found);
@@ -1674,7 +1682,11 @@ removeObject(TransObject *object, TransObjectType type)
 		package = (Package *) object;
 
 		/* Regular variables had already removed */
-		MemoryContextDelete(package->hctxTransact);
+		//Here we should think, when regular HTAB should be removed
+		if (package->hctxRegular)
+			MemoryContextDelete(package->hctxRegular);
+		if (package->hctxTransact)
+			MemoryContextDelete(package->hctxTransact);
 		hash = packagesHash;
 	}
 	else
