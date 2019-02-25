@@ -72,7 +72,6 @@ static bool isObjectChangedInUpperTrans(TransObject *object);
 
 static void addToChangesStack(TransObject *object, TransObjectType type);
 static void pushChangesStack(void);
-static void removeFromChangesStack(TransObject *object, TransObjectType type);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
@@ -1309,7 +1308,6 @@ makePackHTAB(Package *package, bool is_trans)
 	HTAB		  **htab;
 	MemoryContext  *context;
 
-	// maybe we should use macro pack_hctx?
 	htab = is_trans ? &package->varHashTransact : &package->varHashRegular;
 	context = is_trans ? &package->hctxTransact : &package->hctxRegular;
 
@@ -1403,7 +1401,6 @@ createPackage(text *name, bool is_trans)
 	{
 		PackState  *packState;
 
-		//memset(package, 0, sizeof(Package));
 		package->varHashRegular = NULL;
 		package->varHashTransact = NULL;
 		package->hctxRegular = NULL;
@@ -1419,7 +1416,6 @@ createPackage(text *name, bool is_trans)
 	if (!pack_htab(package, is_trans))
 		makePackHTAB(package, is_trans);
 	/* Add to changes list */
-	//addToChangesStack(&package->transObject, TRANS_PACKAGE);
 	if (!isObjectChangedInCurrentTrans(&package->transObject))
 	{
 		createSavepoint(&package->transObject, TRANS_PACKAGE);
@@ -1671,12 +1667,6 @@ removeObject(TransObject *object, TransObjectType type)
 	HTAB	   *hash;
 	Package	   *package = NULL;
 
-	/*
-	 * Delete an object from the change history of the overlying
-	 * transaction level (head of 'changesStack' at this point).
-	 */
-	if (changesStack && !dlist_is_empty(changesStack))
-			removeFromChangesStack(object, type);
 	if (type == TRANS_PACKAGE)
 	{
 		package = (Package *) object;
@@ -1789,17 +1779,38 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 static void
 releaseSavepoint(TransObject *object, TransObjectType type)
 {
-	dlist_head *states;
+	dlist_head *states = &object->states;
 	Assert(GetActualState(object)->level == GetCurrentTransactionNestLevel());
 
-	/* Mark object as changed in parent transaction... */
-	if (!dlist_is_empty(changesStack) /* ...if there is an upper level... */
-		/* ...and object is not yet in list of that level changes. */
-		&& !isObjectChangedInUpperTrans(object))
+	/*
+	 * If the object is not valid and does not exist at a higher level
+	 * (or if we complete the transaction) - remove object.
+	 */
+	if (!GetActualState(object)->is_valid &&
+			(!dlist_has_next(states, dlist_head_node(states)) ||
+			dlist_is_empty(changesStack))
+		)
+	{
+		removeObject(object, type);
+		return;
+	}
+
+ 	/* If object has been changed in upper level -
+	 * replace state of that level with the current one. */
+	if (isObjectChangedInUpperTrans(object))
+	{
+		TransState *stateToDelete;
+		dlist_node *nodeToDelete;
+		nodeToDelete = dlist_next_node(states, dlist_head_node(states));
+		stateToDelete = dlist_container(TransState, node, nodeToDelete);
+		removeState(object, type, stateToDelete);
+	}
+	/* If the object does not yet have a record in previous level changesStack,
+	 * create it. */
+	else if (!dlist_is_empty(changesStack))
 	{
 		ChangedObject *co_new;
 		ChangesStackNode *csn;
-
 		/*
 		 * Impossible to push in upper list existing node
 		 * because it was created in another context
@@ -1809,43 +1820,7 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 		dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
 												csn->changedVarsList,
 												&co_new->node);
-
 	}
-	else
-	{
-		states = &object->states;
-
-		/* If object existed in parent transaction... */
-		if (dlist_has_next(states, dlist_head_node(states)))
-		{
-			TransState *stateToDelete;
-			dlist_node *nodeToDelete;
-
-			/* ...remove its previous state */
-			nodeToDelete = dlist_next_node(states, dlist_head_node(states));
-			stateToDelete = dlist_container(TransState, node, nodeToDelete);
-			removeState(object, type, stateToDelete);
-		}
-
-		/*
-		 * Object has no more previous states and can be completely removed if
-		 * necessary
-		 */
-		if (!GetActualState(object)->is_valid &&
-			!dlist_has_next(states, dlist_head_node(states)))
-		{
-			removeObject(object, type);
-			/* Remove package if it became empty */
-			if (type == TRANS_VARIABLE)
-			{
-				Package *pack = ((Variable *) object)->package;
-				if (isPackageEmpty(pack))
-					(GetActualState(&pack->transObject))->is_valid = false;
-			}
-			return;
-		}
-	}
-
 	/* Change subxact level due to release */
 	GetActualState(object)->level--;
 }
@@ -1977,51 +1952,6 @@ addToChangesStack(TransObject *object, TransObjectType type)
 
 		/* Give this object current subxact level */
 		GetActualState(object)->level = GetCurrentTransactionNestLevel();
-	}
-}
-
-/*
- * Remove from the changes list a deleted package
- */
-static void
-removeFromChangesStack(TransObject *object, TransObjectType type)
-{
-	dlist_mutable_iter var_miter,
-					   pack_miter;
-	dlist_head		  *changesList;
-	ChangesStackNode  *csn = get_actual_changes_list();
-
-	/*
-	 * If we remove package, we should remove corresponding variables
-	 * from changedVarsList first.
-	 */
-	if (type == TRANS_PACKAGE)
-	{
-		changesList = csn->changedVarsList;
-		dlist_foreach_modify(var_miter, changesList)
-		{
-			ChangedObject *co_cur = dlist_container(ChangedObject, node,
-													var_miter.cur);
-			Variable   *var = (Variable *) co_cur->object;
-
-			if (var->package == (Package *)object)
-				dlist_delete(&co_cur->node);
-		}
-	}
-	/* Now remove object itself from changes list */
-	changesList = (type == TRANS_PACKAGE ? csn->changedPacksList :
-										   csn->changedVarsList);
-	dlist_foreach_modify(pack_miter, changesList)
-	{
-		ChangedObject *co_cur = dlist_container(ChangedObject, node,
-												pack_miter.cur);
-		TransObject *obj = co_cur->object;
-
-		if (obj == object)
-		{
-			dlist_delete(&co_cur->node);
-			break;
-		}
 	}
 }
 
