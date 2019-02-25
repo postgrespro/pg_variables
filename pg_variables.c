@@ -1672,7 +1672,6 @@ removeObject(TransObject *object, TransObjectType type)
 		package = (Package *) object;
 
 		/* Regular variables had already removed */
-		//Here we should think, when regular HTAB should be removed
 		if (package->hctxRegular)
 			MemoryContextDelete(package->hctxRegular);
 		if (package->hctxTransact)
@@ -1696,10 +1695,11 @@ removeObject(TransObject *object, TransObjectType type)
 	hash_search(hash, object->name, HASH_REMOVE, &found);
 
 	/* Remove package if it became empty */
-	if (type == TRANS_VARIABLE &&
-		isObjectChangedInCurrentTrans(&package->transObject) &&
-		isPackageEmpty(package))
+	if (type == TRANS_VARIABLE && isPackageEmpty(package))
+	{
+		Assert(isObjectChangedInCurrentTrans(&package->transObject));
 		GetActualState(&package->transObject)->is_valid = false;
+	}
 
 	resetVariablesCache(true);
 }
@@ -1740,14 +1740,8 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	state = GetActualState(object);
 	if (type == TRANS_PACKAGE)
 	{
-		if (!state->is_valid)
+		if (!state->is_valid && !isPackageEmpty((Package *)object))
 		{
-			if (isPackageEmpty((Package *)object))
-			{
-				removeObject(object, TRANS_PACKAGE);
-				return;
-			}
-
 			if (dlist_has_next(&object->states, &state->node))
 			{
 				dlist_pop_head_node(&object->states);
