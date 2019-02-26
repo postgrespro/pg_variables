@@ -63,7 +63,8 @@ typedef struct TransState
 /* List node that stores one of the package's states */
 typedef struct PackState
 {
-	TransState	state;
+	TransState		state;
+	unsigned long	trans_var_num; /* Number of valid transactional variables */
 }			PackState;
 
 /* List node that stores one of the variable's states */
@@ -169,6 +170,9 @@ extern void removeObject(TransObject *object, TransObjectType type);
 
 #define GetActualValue(variable) \
 	(((VarState *) GetActualState(variable))->value)
+
+#define numOfTransVars(package) \
+	(((PackState *) GetActualState(package))->trans_var_num)
 
 #define GetName(object) \
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \

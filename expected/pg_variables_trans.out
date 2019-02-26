@@ -1879,7 +1879,7 @@ SELECT pgv_remove('vars', 'any1');
 
 RELEASE comm;
 SELECT pgv_get('vars', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars"
 COMMIT;
 -- Tests for PGPRO-2440
 SELECT pgv_insert('vars3', 'r3', row(1 :: integer, NULL::varchar), true);
