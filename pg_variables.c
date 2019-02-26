@@ -71,7 +71,13 @@ static bool isObjectChangedInCurrentTrans(TransObject *object);
 static bool isObjectChangedInUpperTrans(TransObject *object);
 
 static void addToChangesStack(TransObject *object, TransObjectType type);
+static void addToChangesStackUpperLevel(TransObject *object,
+										TransObjectType type);
 static void pushChangesStack(void);
+
+static int numOfRegVars(Package *package);
+/* Debug function */
+static int _numOfTransVars(Package *package);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
@@ -892,9 +898,12 @@ remove_variable(PG_FUNCTION_ARGS)
 			addToChangesStack(transObject, TRANS_VARIABLE);
 		}
 		GetActualState(variable)->is_valid = false;
+		numOfTransVars(package)--;
 	}
 	else
 		removeObject(&variable->transObject, TRANS_VARIABLE);
+
+	Assert (numOfTransVars(package) == _numOfTransVars(package));
 
 	resetVariablesCache(false);
 
@@ -950,6 +959,7 @@ removePackageInternal(Package *package)
 		addToChangesStack(transObject, TRANS_PACKAGE);
 	}
 	GetActualState(package)->is_valid = false;
+	numOfTransVars(package) = 0;
 }
 
 static bool
@@ -1338,7 +1348,8 @@ getPackage(text *name, bool strict)
 	{
 		package = (Package *) hash_search(packagesHash, key, HASH_FIND, &found);
 
-		if (found && GetActualState(package)->is_valid)
+		if (found && GetActualState(package)->is_valid && 
+			numOfTransVars(package) + numOfRegVars(package))
 			return package;
 	}
 	/* Package not found or it's current state is "invalid" */
@@ -1410,17 +1421,15 @@ createPackage(text *name, bool is_trans)
 		packState = MemoryContextAllocZero(ModuleContext, sizeof(PackState));
 		dlist_push_head(GetStateStorage(package), &(packState->state.node));
 		packState->state.is_valid = true;
+		packState->trans_var_num = 0;
+		/* Add to changes list */
+		if (!isObjectChangedInCurrentTrans(&package->transObject))
+			addToChangesStack(&package->transObject, TRANS_PACKAGE);
 	}
 
 	/* Create corresponding HTAB if not exists */
 	if (!pack_htab(package, is_trans))
 		makePackHTAB(package, is_trans);
-	/* Add to changes list */
-	if (!isObjectChangedInCurrentTrans(&package->transObject))
-	{
-		createSavepoint(&package->transObject, TRANS_PACKAGE);
-		addToChangesStack(&package->transObject, TRANS_PACKAGE);
-	}
 
 	return package;
 }
@@ -1586,7 +1595,13 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 		}
 	}
 
+	if (is_transactional &&
+		(!found || !GetActualState(variable)->is_valid))
+		numOfTransVars(package)++;
 	GetActualState(variable)->is_valid = true;
+	
+	Assert (numOfTransVars(package) == _numOfTransVars(package));
+	
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
 		addToChangesStack(transObject, TRANS_VARIABLE);
@@ -1715,8 +1730,11 @@ createSavepoint(TransObject *object, TransObjectType type)
 
 	prevState = GetActualState(object);
 	if (type == TRANS_PACKAGE)
+	{
 		newState = (TransState *) MemoryContextAllocZero(ModuleContext,
 														 sizeof(PackState));
+		((PackState *)newState)->trans_var_num = ((PackState *)prevState)->trans_var_num;
+	}
 	else
 	{
 		Variable   *var = (Variable *) object;
@@ -1729,6 +1747,15 @@ createSavepoint(TransObject *object, TransObjectType type)
 	newState->is_valid = prevState->is_valid;
 }
 
+static int
+numOfRegVars(Package *package)
+{
+	if (package->varHashRegular)
+		return hash_get_num_entries(package->varHashRegular);
+	else
+		return 0;
+}
+
 /*
  * Rollback object to its previous state
  */
@@ -1738,32 +1765,27 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	TransState *state;
 
 	state = GetActualState(object);
-	if (type == TRANS_PACKAGE)
+	removeState(object, type, state);
+
+	if (dlist_is_empty(&object->states))
 	{
-		if (!state->is_valid && !isPackageEmpty((Package *)object))
+		if (type == TRANS_PACKAGE && numOfRegVars((Package *)object))
 		{
-			if (dlist_has_next(&object->states, &state->node))
+			PackState		 *packState;
+
+			packState = MemoryContextAllocZero(ModuleContext, sizeof(PackState));
+			dlist_push_head(&object->states, &(packState->state.node));
+			packState->state.is_valid = true;
+			packState->state.level = GetCurrentTransactionNestLevel() - 1;
+			packState->trans_var_num = 0;
+
+			if (!dlist_is_empty(changesStack))
 			{
-				dlist_pop_head_node(&object->states);
-				pfree(state);
+				addToChangesStackUpperLevel(object, type);
 			}
-			else
-				state->is_valid = true;
-			/* Restore regular vars HTAB */
-			makePackHTAB((Package *) object, false);
 		}
 		else
-			/* Pass current state to parent level */
-			releaseSavepoint(object, TRANS_PACKAGE);
-	}
-	else
-	{
-		/* Remove current state */
-		removeState(object, TRANS_VARIABLE, state);
-
-		/* Remove variable if it was created in rolled back transaction */
-		if (dlist_is_empty(&object->states))
-			removeObject(object, TRANS_VARIABLE);
+			removeObject(object, type);
 	}
 }
 
@@ -1802,21 +1824,31 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 	/* If the object does not yet have a record in previous level changesStack,
 	 * create it. */
 	else if (!dlist_is_empty(changesStack))
-	{
-		ChangedObject *co_new;
-		ChangesStackNode *csn;
-		/*
-		 * Impossible to push in upper list existing node
-		 * because it was created in another context
-		 */
-		csn = dlist_head_element(ChangesStackNode, node, changesStack);
-		co_new = makeChangedObject(object, csn->ctx);
-		dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
-												csn->changedVarsList,
-												&co_new->node);
-	}
+		addToChangesStackUpperLevel(object, type);
+
 	/* Change subxact level due to release */
 	GetActualState(object)->level--;
+	if (type == TRANS_PACKAGE)
+	{
+		Package *package = (Package *)object;
+		Assert (numOfTransVars(package) == _numOfTransVars(package));
+	}
+}
+
+static void
+addToChangesStackUpperLevel(TransObject *object, TransObjectType type)
+{
+	ChangedObject *co_new;
+	ChangesStackNode *csn;
+	/*
+		* Impossible to push in upper list existing node
+		* because it was created in another context
+		*/
+	csn = dlist_head_element(ChangesStackNode, node, changesStack);
+	co_new = makeChangedObject(object, csn->ctx);
+	dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
+											csn->changedVarsList,
+											&co_new->node);
 }
 
 /*
@@ -2135,4 +2167,26 @@ _PG_fini(void)
 	UnregisterXactCallback(pgvTransCallback, NULL);
 	UnregisterSubXactCallback(pgvSubTransCallback, NULL);
 	ExecutorEnd_hook = prev_ExecutorEnd;
+}
+
+/* Get exact count of valid variables in package. For debug only. */
+static int
+_numOfTransVars(Package *package)
+{
+	HASH_SEQ_STATUS vstat;
+	Variable	   *variable;
+	unsigned long res = 0;
+
+	if (package->varHashTransact)
+	{
+		hash_seq_init(&vstat, package->varHashTransact);
+		while ((variable = (Variable *) hash_seq_search(&vstat)) != NULL)
+		{
+			if (GetActualState(variable)->is_valid &&
+				GetActualState(package)->is_valid)
+				res++;
+		}
+	}
+
+	return res;
 }
