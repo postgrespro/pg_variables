@@ -1408,19 +1408,17 @@ createPackage(text *name, bool is_trans)
 
 	if (found)
 	{
+		TransObject *transObj = &package->transObject;
+
+		if (!isObjectChangedInCurrentTrans(transObj))
+			createSavepoint(transObj, TRANS_PACKAGE);
+
 		if (!GetActualState(package)->is_valid)
-		/* Make package valid again */
 		{
 			HASH_SEQ_STATUS vstat;
 			Variable   *variable;
-			TransObject *transObj = &package->transObject;
-
-			/* Make new history entry of package */
-			if (!isObjectChangedInCurrentTrans(transObj))
-				createSavepoint(transObj, TRANS_PACKAGE);
 
 			GetActualState(package)->is_valid = true;
-
 			/* Mark all transactional variables in package as removed */
 			if (package->varHashTransact)
 			{
@@ -1448,14 +1446,14 @@ createPackage(text *name, bool is_trans)
 		package->hctxRegular = NULL;
 		package->hctxTransact = NULL;
 		initObjectHistory(&package->transObject, TRANS_PACKAGE);
-		/* Add to changes list */
-		if (!isObjectChangedInCurrentTrans(&package->transObject))
-			addToChangesStack(&package->transObject, TRANS_PACKAGE);
 	}
 
 	/* Create corresponding HTAB if not exists */
 	if (!pack_htab(package, is_trans))
 		makePackHTAB(package, is_trans);
+	/* Add to changes list */
+	if (!isObjectChangedInCurrentTrans(&package->transObject))
+		addToChangesStack(&package->transObject, TRANS_PACKAGE);
 
 	return package;
 }
