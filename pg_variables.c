@@ -899,8 +899,8 @@ remove_variable(PG_FUNCTION_ARGS)
 			addToChangesStack(transObject, TRANS_VARIABLE);
 		}
 		GetActualState(variable)->is_valid = false;
-		numOfTransVars(package)--;
-		if ((numOfTransVars(package) + numOfRegVars(package)) == 0)
+		GetPackState(package)->trans_var_num--;
+		if ((GetPackState(package)->trans_var_num + numOfRegVars(package)) == 0)
 			GetActualState(package)->is_valid = false;
 	}
 	else
@@ -962,7 +962,7 @@ removePackageInternal(Package *package)
 		addToChangesStack(transObject, TRANS_PACKAGE);
 	}
 	GetActualState(package)->is_valid = false;
-	numOfTransVars(package) = 0;
+	GetPackState(package)->trans_var_num = 0;
 }
 
 static bool
@@ -1384,7 +1384,8 @@ getPackage(text *name, bool strict)
 
 		if (found && GetActualState(package)->is_valid)
 		{
-			Assert (numOfTransVars(package) + numOfRegVars(package) > 0);
+			Assert (GetPackState(package)->trans_var_num +
+					numOfRegVars(package) > 0);
 			return package;
 		}
 	}
@@ -1610,7 +1611,7 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 
 	if (is_transactional &&
 		(!found || !GetActualState(variable)->is_valid))
-		numOfTransVars(package)++;
+		GetPackState(package)->trans_var_num++;
 	GetActualState(variable)->is_valid = true;
 	
 	Assert (numOfTransVars(package) == _numOfTransVars(package));
