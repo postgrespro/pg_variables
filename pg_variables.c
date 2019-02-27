@@ -900,6 +900,8 @@ remove_variable(PG_FUNCTION_ARGS)
 		}
 		GetActualState(variable)->is_valid = false;
 		numOfTransVars(package)--;
+		if ((numOfTransVars(package) + numOfRegVars(package)) == 0)
+			GetActualState(package)->is_valid = false;
 	}
 	else
 		removeObject(&variable->transObject, TRANS_VARIABLE);
@@ -1380,9 +1382,11 @@ getPackage(text *name, bool strict)
 	{
 		package = (Package *) hash_search(packagesHash, key, HASH_FIND, &found);
 
-		if (found && GetActualState(package)->is_valid && 
-			numOfTransVars(package) + numOfRegVars(package))
+		if (found && GetActualState(package)->is_valid)
+		{
+			Assert (numOfTransVars(package) + numOfRegVars(package) > 0);
 			return package;
+		}
 	}
 	/* Package not found or it's current state is "invalid" */
 	if (strict)
@@ -1778,7 +1782,7 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 
 	if (dlist_is_empty(&object->states))
 	{
-		if (type == TRANS_PACKAGE && numOfRegVars((Package *)object))
+		if (type == TRANS_PACKAGE && numOfRegVars((Package *)object) > 0)
 		{
 			initObjectHistory(object, type);
 			GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
