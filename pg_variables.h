@@ -171,15 +171,11 @@ extern void removeObject(TransObject *object, TransObjectType type);
 #define GetActualValue(variable) \
 	(((VarState *) GetActualState(variable))->value)
 
-#define numOfTransVars(package) \
-	(((PackState *) GetActualState(package))->trans_var_num)
+#define GetPackState(package) \
+	(((PackState *) GetActualState(package)))
 
 #define GetName(object) \
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
 	 object->transObject.name)
-
-#define GetStateStorage(object) \
-	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
-	 &(object->transObject.states))
 
 #endif							/* __PG_VARIABLES_H__ */
