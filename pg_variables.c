@@ -83,6 +83,7 @@ static int _numOfTransVars(Package *package);
 static void makePackHTAB(Package *package, bool is_trans);
 static inline ChangedObject *makeChangedObject(TransObject *object,
 											   MemoryContext ctx);
+static void initObjectHistory(TransObject *object, TransObjectType type);
 
 /* Hook functions */
 static void variable_ExecutorEnd(QueryDesc *queryDesc);
@@ -1334,6 +1335,37 @@ makePackHTAB(Package *package, bool is_trans)
 						HASH_ELEM | HASH_CONTEXT);
 }
 
+static void
+initObjectHistory(TransObject *object, TransObjectType type)
+{
+	/* Initialize history */
+	TransState *state;
+	int			size;
+
+	size = (type == TRANS_PACKAGE ? sizeof(PackState) : sizeof(VarState));
+	dlist_init(&object->states);
+	state = MemoryContextAllocZero(ModuleContext, size);
+	dlist_push_head(&object->states, &(state->node));
+
+	/* Initialize state */
+	state->is_valid = true;
+	if (type == TRANS_PACKAGE)
+		((PackState *)state)->trans_var_num = 0;
+	else
+	{
+		Variable *variable = (Variable *) object;
+		if (!variable->is_record)
+		{
+			VarState * varState = (VarState *) state;
+			ScalarVar  *scalar = &(varState->value.scalar);
+
+			get_typlenbyval(variable->typid, &scalar->typlen, 
+							&scalar->typbyval);
+			varState->value.scalar.is_null = true;
+		}
+	}
+}
+
 static Package *
 getPackage(text *name, bool strict)
 {
@@ -1410,18 +1442,12 @@ createPackage(text *name, bool is_trans)
 	}
 	else
 	{
-		PackState  *packState;
-
+		/* Package entry was created, so initialize it. */
 		package->varHashRegular = NULL;
 		package->varHashTransact = NULL;
 		package->hctxRegular = NULL;
 		package->hctxTransact = NULL;
-		/* Initialize history */
-		dlist_init(GetStateStorage(package));
-		packState = MemoryContextAllocZero(ModuleContext, sizeof(PackState));
-		dlist_push_head(GetStateStorage(package), &(packState->state.node));
-		packState->state.is_valid = true;
-		packState->trans_var_num = 0;
+		initObjectHistory(&package->transObject, TRANS_PACKAGE);
 		/* Add to changes list */
 		if (!isObjectChangedInCurrentTrans(&package->transObject))
 			addToChangesStack(&package->transObject, TRANS_PACKAGE);
@@ -1566,27 +1592,12 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 	}
 	else
 	{
-		VarState   *varState;
-
 		/* Variable entry was created, so initialize new variable. */
 		variable->typid = typid;
 		variable->package = package;
 		variable->is_record = is_record;
 		variable->is_transactional = is_transactional;
-
-		dlist_init(GetStateStorage(variable));
-		varState = MemoryContextAllocZero(pack_hctx(package, is_transactional),
-										  sizeof(VarState));
-
-		dlist_push_head(GetStateStorage(variable), &varState->state.node);
-		if (!variable->is_record)
-		{
-			ScalarVar  *scalar = &(varState->value.scalar);
-
-			get_typlenbyval(variable->typid, &scalar->typlen,
-							&scalar->typbyval);
-			varState->value.scalar.is_null = true;
-		}
+		initObjectHistory(transObject, TRANS_VARIABLE);
 
 		if (!isObjectChangedInCurrentTrans(&package->transObject))
 		{
@@ -1771,18 +1782,10 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	{
 		if (type == TRANS_PACKAGE && numOfRegVars((Package *)object))
 		{
-			PackState		 *packState;
-
-			packState = MemoryContextAllocZero(ModuleContext, sizeof(PackState));
-			dlist_push_head(&object->states, &(packState->state.node));
-			packState->state.is_valid = true;
-			packState->state.level = GetCurrentTransactionNestLevel() - 1;
-			packState->trans_var_num = 0;
-
+			initObjectHistory(object, type);
+			GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
 			if (!dlist_is_empty(changesStack))
-			{
 				addToChangesStackUpperLevel(object, type);
-			}
 		}
 		else
 			removeObject(object, type);
