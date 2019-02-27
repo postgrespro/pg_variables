@@ -76,8 +76,6 @@ static void addToChangesStackUpperLevel(TransObject *object,
 static void pushChangesStack(void);
 
 static int numOfRegVars(Package *package);
-/* Debug function */
-static int _numOfTransVars(Package *package);
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
@@ -906,8 +904,6 @@ remove_variable(PG_FUNCTION_ARGS)
 	else
 		removeObject(&variable->transObject, TRANS_VARIABLE);
 
-	Assert (numOfTransVars(package) == _numOfTransVars(package));
-
 	resetVariablesCache(false);
 
 	PG_FREE_IF_COPY(package_name, 0);
@@ -1614,8 +1610,6 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 		GetPackState(package)->trans_var_num++;
 	GetActualState(variable)->is_valid = true;
 	
-	Assert (numOfTransVars(package) == _numOfTransVars(package));
-	
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
 		addToChangesStack(transObject, TRANS_VARIABLE);
@@ -1834,11 +1828,6 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 
 	/* Change subxact level due to release */
 	GetActualState(object)->level--;
-	if (type == TRANS_PACKAGE)
-	{
-		Package *package = (Package *)object;
-		Assert (numOfTransVars(package) == _numOfTransVars(package));
-	}
 }
 
 static void
@@ -2173,26 +2162,4 @@ _PG_fini(void)
 	UnregisterXactCallback(pgvTransCallback, NULL);
 	UnregisterSubXactCallback(pgvSubTransCallback, NULL);
 	ExecutorEnd_hook = prev_ExecutorEnd;
-}
-
-/* Get exact count of valid variables in package. For debug only. */
-static int
-_numOfTransVars(Package *package)
-{
-	HASH_SEQ_STATUS vstat;
-	Variable	   *variable;
-	unsigned long res = 0;
-
-	if (package->varHashTransact)
-	{
-		hash_seq_init(&vstat, package->varHashTransact);
-		while ((variable = (Variable *) hash_seq_search(&vstat)) != NULL)
-		{
-			if (GetActualState(variable)->is_valid &&
-				GetActualState(package)->is_valid)
-				res++;
-		}
-	}
-
-	return res;
 }
