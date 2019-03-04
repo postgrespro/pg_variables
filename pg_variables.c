@@ -801,7 +801,7 @@ variable_exists(PG_FUNCTION_ARGS)
 	text	   *package_name;
 	text	   *var_name;
 	Package	   *package;
-	Variable   *variable;
+	Variable   *variable = NULL;
 	char		key[NAMEDATALEN];
 	bool		found = false;
 
@@ -831,7 +831,7 @@ variable_exists(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
 
-	PG_RETURN_BOOL(found ? GetActualState(variable)->is_valid : found);
+	PG_RETURN_BOOL(variable ? GetActualState(variable)->is_valid : false);
 }
 
 /*
