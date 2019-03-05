@@ -1605,6 +1605,10 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 		}
 	}
 
+	/*
+	 * If the variable has been created or has just become valid,
+	 * increment the counter of valid transactional variables.
+	 */
 	if (is_transactional &&
 		(!found || !GetActualState(variable)->is_valid))
 		GetPackState(package)->trans_var_num++;
