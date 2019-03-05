@@ -500,4 +500,13 @@ SELECT pgv_free();
 ERROR;
 COMMIT;
 
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+SELECT pgv_free();
+SAVEPOINT sp_to_rollback;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ROLLBACK TO sp_to_rollback;
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+
 SELECT pgv_free();
