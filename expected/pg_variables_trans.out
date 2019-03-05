@@ -1935,6 +1935,33 @@ ERROR:  syntax error at or near "ERROR"
 LINE 1: ERROR;
         ^
 COMMIT;
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+SAVEPOINT sp_to_rollback;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+ROLLBACK TO sp_to_rollback;
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+ package 
+---------
+(0 rows)
+
 SELECT pgv_free();
  pgv_free 
 ----------
