@@ -509,4 +509,20 @@ ROLLBACK TO sp_to_rollback;
 COMMIT;
 SELECT package FROM pgv_stats() ORDER BY package;
 
+-- Package should exist after rollback if it contains regular variable
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text);
+ROLLBACK;
+SELECT package FROM pgv_stats() ORDER BY package;
+
+-- Package should not exist if it becomes empty in rolled back transaction
+BEGIN;
+SAVEPOINT comm2;
+SELECT pgv_remove('vars');
+ROLLBACK TO comm2;
+SELECT pgv_exists('vars');
+SELECT package FROM pgv_stats() ORDER BY package;
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+
 SELECT pgv_free();
