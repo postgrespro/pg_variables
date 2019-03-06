@@ -961,13 +961,11 @@ removePackageInternal(Package *package)
 	GetPackState(package)->trans_var_num = 0;
 }
 
+/* Check if package has any valid variables */
 static bool
 isPackageEmpty(Package *package)
 {
-	int var_num = 0;
-	
-	if (package->varHashTransact)
-		var_num += hash_get_num_entries(package->varHashTransact);
+	int var_num = GetPackState(package)->trans_var_num;
 
 	if (package->varHashRegular)
 		var_num += hash_get_num_entries(package->varHashRegular);
@@ -1357,7 +1355,7 @@ initObjectHistory(TransObject *object, TransObjectType type)
 			VarState * varState = (VarState *) state;
 			ScalarVar  *scalar = &(varState->value.scalar);
 
-			get_typlenbyval(variable->typid, &scalar->typlen, 
+			get_typlenbyval(variable->typid, &scalar->typlen,
 							&scalar->typbyval);
 			varState->value.scalar.is_null = true;
 		}
@@ -1613,7 +1611,7 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 		(!found || !GetActualState(variable)->is_valid))
 		GetPackState(package)->trans_var_num++;
 	GetActualState(variable)->is_valid = true;
-	
+
 	/* If it is necessary, put variable to changedVars */
 	if (is_transactional)
 		addToChangesStack(transObject, TRANS_VARIABLE);
@@ -1779,16 +1777,49 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	state = GetActualState(object);
 	removeState(object, type, state);
 
-	if (dlist_is_empty(&object->states))
+	if (type == TRANS_PACKAGE)
 	{
-		if (type == TRANS_PACKAGE && numOfRegVars((Package *)object) > 0)
+		/* If there is no more states... */
+		if (dlist_is_empty(&object->states))
 		{
-			initObjectHistory(object, type);
-			GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
-			if (!dlist_is_empty(changesStack))
-				addToChangesStackUpperLevel(object, type);
+			/* ...but object is a package and has some regular variables... */
+			if (numOfRegVars((Package *)object) > 0)
+			{
+				/* ...create a new state to make package valid. */
+				initObjectHistory(object, type);
+				GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
+				if (!dlist_is_empty(changesStack))
+					addToChangesStackUpperLevel(object, type);
+			}
+			else
+				/* ...or remove an object if it is no longer needed. */
+				removeObject(object, type);
 		}
-		else
+		/*
+		* But if a package has more states, but hasn't valid variables,
+		* mark it as not valid or remove at top level transaction.
+		*/
+		else if (isPackageEmpty((Package *)object))
+		{
+			if (dlist_is_empty(changesStack))
+			{
+				removeObject(object, type);
+				return;
+			}
+			else if (!isObjectChangedInUpperTrans(object) &&
+					 !dlist_is_empty(changesStack))
+			{
+				createSavepoint(object, type);
+				addToChangesStackUpperLevel(object, type);
+				GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
+			}
+			GetActualState(object)->is_valid = false;
+		}
+	}
+	else
+	{
+		if (dlist_is_empty(&object->states))
+			/* Remove a variable if it is no longer needed. */
 			removeObject(object, type);
 	}
 }
@@ -1840,9 +1871,9 @@ addToChangesStackUpperLevel(TransObject *object, TransObjectType type)
 	ChangedObject *co_new;
 	ChangesStackNode *csn;
 	/*
-		* Impossible to push in upper list existing node
-		* because it was created in another context
-		*/
+	 * Impossible to push in upper list existing node
+	 * because it was created in another context
+	 */
 	csn = dlist_head_element(ChangesStackNode, node, changesStack);
 	co_new = makeChangedObject(object, csn->ctx);
 	dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
@@ -1875,13 +1906,14 @@ isObjectChangedInUpperTrans(TransObject *object)
 			   *prev_state;
 
 	cur_state = GetActualState(object);
-	if (dlist_has_next(&object->states, &cur_state->node))
+	if (dlist_has_next(&object->states, &cur_state->node) &&
+		cur_state->level == GetCurrentTransactionNestLevel())
 	{
 		prev_state = dlist_container(TransState, node, cur_state->node.next);
 		return prev_state->level == GetCurrentTransactionNestLevel() - 1;
 	}
-
-	return false;
+	else
+		return cur_state->level == GetCurrentTransactionNestLevel() - 1;
 }
 
 /*
