@@ -525,4 +525,10 @@ SELECT package FROM pgv_stats() ORDER BY package;
 COMMIT;
 SELECT package FROM pgv_stats() ORDER BY package;
 
+SELECT pgv_set('vars', 'any1', 'some value'::text);
+BEGIN;
+SELECT pgv_remove('vars');
+ROLLBACK;
+SELECT package FROM pgv_stats() ORDER BY package;
+
 SELECT pgv_free();
