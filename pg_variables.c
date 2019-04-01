@@ -2124,6 +2124,7 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				break;
 		}
 	}
+	LastHSeqStatus = NULL;
 }
 
 /*
@@ -2152,10 +2153,7 @@ pgvTransCallback(XactEvent event, void *arg)
 				break;
 		}
 	}
-
-	if (event == XACT_EVENT_PARALLEL_ABORT || event == XACT_EVENT_ABORT)
-		if (LastHSeqStatus)
-			LastHSeqStatus = NULL;
+	LastHSeqStatus = NULL;
 }
 
 /*
