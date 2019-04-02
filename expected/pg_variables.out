@@ -704,6 +704,16 @@ SELECT pgv_exists('vars3', 'r1');
 
 SELECT pgv_select('vars2', 'j1');
 ERROR:  variable "j1" requires "jsonb" value
+-- PGPRO-2601 - Test pgv_select() on TupleDesc of dropped table
+DROP TABLE tab;
+SELECT pgv_select('vars3', 'r1');
+ pgv_select 
+------------
+ (,strNULL)
+ (2,)
+ (0,str00)
+(3 rows)
+
 -- Tests for SRF's sequential scan of an internal hash table
 DO
 $$BEGIN

@@ -80,6 +80,8 @@ SELECT pgv_get_jsonb('vars2', 'j1');
 SELECT pgv_get_jsonb('vars2', 'j2');
 COMMIT;
 
+CREATE TABLE tab (id int, t varchar);
+INSERT INTO tab VALUES (0, 'str00'), (1, 'str33'), (2, NULL), (NULL, 'strNULL');
 
 BEGIN;
 SELECT pgv_insert('vars3', 'r1', tab, true) FROM tab;

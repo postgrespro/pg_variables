@@ -416,6 +416,8 @@ SELECT pgv_get_jsonb('vars2', 'j2');
 (1 row)
 
 COMMIT;
+CREATE TABLE tab (id int, t varchar);
+INSERT INTO tab VALUES (0, 'str00'), (1, 'str33'), (2, NULL), (NULL, 'strNULL');
 BEGIN;
 SELECT pgv_insert('vars3', 'r1', tab, true) FROM tab;
  pgv_insert 
@@ -452,8 +454,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -462,8 +464,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -473,8 +475,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -483,8 +485,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -824,8 +826,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -833,8 +835,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -843,8 +845,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -853,8 +855,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1132,8 +1134,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1142,8 +1144,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1153,8 +1155,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1163,8 +1165,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1230,8 +1232,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1239,8 +1241,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1249,8 +1251,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1259,8 +1261,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1436,8 +1438,8 @@ SELECT pgv_select('vars3', 'r1');
         pgv_select         
 ---------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1447,8 +1449,8 @@ SELECT pgv_select('vars3', 'r1');
         pgv_select         
 ---------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1458,8 +1460,8 @@ SELECT pgv_select('vars3', 'r1');
         pgv_select         
 ---------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1469,8 +1471,8 @@ SELECT pgv_select('vars3', 'r1');
               pgv_select              
 --------------------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
  (7,"row after sp2 to remove in sp4")
@@ -1481,8 +1483,8 @@ SELECT pgv_select('vars3', 'r1');
               pgv_select              
 --------------------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
  (7,"row after sp2 to remove in sp4")
@@ -1493,8 +1495,8 @@ SELECT pgv_select('vars3', 'r1');
          pgv_select         
 ----------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"before savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1504,8 +1506,8 @@ SELECT pgv_select('vars3', 'r1');
          pgv_select         
 ----------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"before savepoint sp1")
  (0,str00)
 (5 rows)

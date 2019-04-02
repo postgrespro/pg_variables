@@ -195,6 +195,10 @@ SELECT pgv_exists('vars3', 'r3');
 SELECT pgv_exists('vars3', 'r1');
 SELECT pgv_select('vars2', 'j1');
 
+-- PGPRO-2601 - Test pgv_select() on TupleDesc of dropped table
+DROP TABLE tab;
+SELECT pgv_select('vars3', 'r1');
+
 -- Tests for SRF's sequential scan of an internal hash table
 DO
 $$BEGIN
