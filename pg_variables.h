@@ -128,7 +128,7 @@ typedef struct HashRecordKey
 typedef struct HashRecordEntry
 {
 	HashRecordKey key;
-	HeapTuple	tuple;
+	Datum		tuple;
 }			HashRecordEntry;
 
 /* Element of list with objects created, changed or removed within transaction */
@@ -157,12 +157,12 @@ typedef struct ChangesStackNode
 extern void init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable);
 extern void check_attributes(Variable *variable, TupleDesc tupdesc);
 extern void check_record_key(Variable *variable, Oid typid);
-extern void copy_record(RecordVar *dest_record, HeapTuple src_tuple,
-						Variable *variable);
 
 extern void insert_record(Variable *variable, HeapTupleHeader tupleHeader);
 extern bool update_record(Variable *variable, HeapTupleHeader tupleHeader);
 extern bool delete_record(Variable *variable, Datum value, bool is_null);
+extern void insert_record_copy(RecordVar *dest_record, Datum src_tuple,
+							   Variable *variable);
 extern void removeObject(TransObject *object, TransObjectType type);
 
 #define GetActualState(object) \

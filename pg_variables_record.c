@@ -8,8 +8,10 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "funcapi.h"
 
 #include "access/htup_details.h"
+#include "access/tuptoaster.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "utils/builtins.h"
@@ -134,7 +136,11 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 #endif
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
-	record->tupdesc = CreateTupleDescCopyConstr(tupdesc);
+	record->tupdesc = CreateTupleDescCopy(tupdesc);
+	record->tupdesc->tdhasoid = false;
+	record->tupdesc->tdtypeid = RECORDOID;
+	record->tupdesc->tdtypmod = -1;
+	record->tupdesc = BlessTupleDesc(record->tupdesc);
 
 	/* Initialize hash table. */
 	ctl.keysize = sizeof(HashRecordKey);
@@ -149,47 +155,6 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 
 	fmgr_info(typentry->hash_proc_finfo.fn_oid, &record->hash_proc);
 	fmgr_info(typentry->cmp_proc_finfo.fn_oid, &record->cmp_proc);
-
-	MemoryContextSwitchTo(oldcxt);
-}
-
-/*
- * Copy record using src_tuple.
- */
-void
-copy_record(RecordVar *dest_record, HeapTuple src_tuple, Variable *variable)
-{
-	HeapTuple	tuple;
-	Datum		value;
-	bool		isnull;
-	HashRecordKey k;
-	HashRecordEntry *item;
-	bool		found;
-	MemoryContext oldcxt;
-
-	oldcxt = MemoryContextSwitchTo(dest_record->hctx);
-
-	/* Inserting a new record into dest_record */
-	tuple = heap_copytuple(src_tuple);
-	value = fastgetattr(tuple, 1, dest_record->tupdesc, &isnull);
-
-	k.value = value;
-	k.is_null = isnull;
-	k.hash_proc = &dest_record->hash_proc;
-	k.cmp_proc = &dest_record->cmp_proc;
-
-	item = (HashRecordEntry *) hash_search(dest_record->rhash, &k,
-										   HASH_ENTER, &found);
-	if (found)
-	{
-		heap_freetuple(tuple);
-		MemoryContextSwitchTo(oldcxt);
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("there is a record in the variable \"%s\" with same "
-						"key", GetName(variable))));
-	}
-	item->tuple = tuple;
 
 	MemoryContextSwitchTo(oldcxt);
 }
@@ -247,15 +212,78 @@ check_record_key(Variable *variable, Oid typid)
 						"key type", GetName(variable))));
 }
 
+static Datum
+copy_record_tuple(RecordVar *record, HeapTupleHeader tupleHeader)
+{
+	TupleDesc	tupdesc;
+	HeapTupleHeader result;
+	int			tuple_len;
+
+	tupdesc = record->tupdesc;
+
+	/*
+	 * If the tuple contains any external TOAST pointers, we have to inline
+	 * those fields to meet the conventions for composite-type Datums.
+	 */
+	if (HeapTupleHeaderHasExternal(tupleHeader))
+		return toast_flatten_tuple_to_datum(tupleHeader,
+									HeapTupleHeaderGetDatumLength(tupleHeader),
+											tupdesc);
+
+	/*
+	 * Fast path for easy case: just make a palloc'd copy and insert the
+	 * correct composite-Datum header fields (since those may not be set if
+	 * the given tuple came from disk, rather than from heap_form_tuple).
+	 */
+	tuple_len = HeapTupleHeaderGetDatumLength(tupleHeader);
+	result = (HeapTupleHeader) palloc(tuple_len);
+	memcpy((char *) result, (char *) tupleHeader, tuple_len);
+
+	HeapTupleHeaderSetDatumLength(result, tuple_len);
+	HeapTupleHeaderSetTypeId(result, tupdesc->tdtypeid);
+	HeapTupleHeaderSetTypMod(result, tupdesc->tdtypmod);
+
+	return PointerGetDatum(result);
+}
+
+static Datum
+get_record_key(Datum tuple, TupleDesc tupdesc, bool *isnull)
+{
+	HeapTupleHeader th = (HeapTupleHeader) DatumGetPointer(tuple);
+	bool		hasnulls = th->t_infomask & HEAP_HASNULL;
+	bits8	   *bp = th->t_bits;		/* ptr to null bitmap in tuple */
+	char	   *tp;						/* ptr to tuple data */
+	long		off;					/* offset in tuple data */
+	int			keyatt = 0;
+	Form_pg_attribute attr = GetTupleDescAttr(tupdesc, keyatt);
+
+	if (hasnulls && att_isnull(keyatt, bp))
+	{
+		*isnull = true;
+		return (Datum) NULL;
+	}
+
+	tp = (char *) th + th->t_hoff;
+	off = 0;
+	if (attr->attlen == -1)
+		off = att_align_pointer(off, attr->attalign, -1, tp + off);
+	else
+	{
+		/* not varlena, so safe to use att_align_nominal */
+		off = att_align_nominal(off, attr->attalign);
+	}
+
+	*isnull = false;
+	return fetchatt(attr, tp + off);
+}
+
 /*
  * Insert a new record. New record key should be unique in the variable.
  */
 void
 insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 {
-	TupleDesc	tupdesc;
-	HeapTuple	tuple;
-	int			tuple_len;
+	Datum		tuple;
 	Datum		value;
 	bool		isnull;
 	RecordVar  *record;
@@ -270,20 +298,10 @@ insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
-	tupdesc = record->tupdesc;
-
-	/* Build a HeapTuple control structure */
-	tuple_len = HeapTupleHeaderGetDatumLength(tupleHeader);
-
-	tuple = (HeapTuple) palloc(HEAPTUPLESIZE + tuple_len);
-	tuple->t_len = tuple_len;
-	ItemPointerSetInvalid(&(tuple->t_self));
-	tuple->t_tableOid = InvalidOid;
-	tuple->t_data = (HeapTupleHeader) ((char *) tuple + HEAPTUPLESIZE);
-	memcpy((char *) tuple->t_data, (char *) tupleHeader, tuple_len);
+	tuple = copy_record_tuple(record, tupleHeader);
 
 	/* Inserting a new record */
-	value = fastgetattr(tuple, 1, tupdesc, &isnull);
+	value = get_record_key(tuple, record->tupdesc, &isnull);
 	/* First, check if there is a record with same key */
 	k.value = value;
 	k.is_null = isnull;
@@ -294,7 +312,7 @@ insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 										   HASH_ENTER, &found);
 	if (found)
 	{
-		heap_freetuple(tuple);
+		pfree(DatumGetPointer(tuple));
 		MemoryContextSwitchTo(oldcxt);
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -313,9 +331,7 @@ insert_record(Variable *variable, HeapTupleHeader tupleHeader)
 bool
 update_record(Variable *variable, HeapTupleHeader tupleHeader)
 {
-	TupleDesc	tupdesc;
-	HeapTuple	tuple;
-	int			tuple_len;
+	Datum		tuple;
 	Datum		value;
 	bool		isnull;
 	RecordVar  *record;
@@ -330,20 +346,10 @@ update_record(Variable *variable, HeapTupleHeader tupleHeader)
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 
-	tupdesc = record->tupdesc;
-
-	/* Build a HeapTuple control structure */
-	tuple_len = HeapTupleHeaderGetDatumLength(tupleHeader);
-
-	tuple = (HeapTuple) palloc(HEAPTUPLESIZE + tuple_len);
-	tuple->t_len = tuple_len;
-	ItemPointerSetInvalid(&(tuple->t_self));
-	tuple->t_tableOid = InvalidOid;
-	tuple->t_data = (HeapTupleHeader) ((char *) tuple + HEAPTUPLESIZE);
-	memcpy((char *) tuple->t_data, (char *) tupleHeader, tuple_len);
+	tuple = copy_record_tuple(record, tupleHeader);
 
 	/* Update a record */
-	value = fastgetattr(tuple, 1, tupdesc, &isnull);
+	value = get_record_key(tuple, record->tupdesc, &isnull);
 	k.value = value;
 	k.is_null = isnull;
 	k.hash_proc = &record->hash_proc;
@@ -353,13 +359,13 @@ update_record(Variable *variable, HeapTupleHeader tupleHeader)
 										   HASH_FIND, &found);
 	if (!found)
 	{
-		heap_freetuple(tuple);
+		pfree(DatumGetPointer(tuple));
 		MemoryContextSwitchTo(oldcxt);
 		return false;
 	}
 
 	/* Release old tuple */
-	heap_freetuple(item->tuple);
+	pfree(DatumGetPointer(item->tuple));
 	item->tuple = tuple;
 
 	MemoryContextSwitchTo(oldcxt);
@@ -387,7 +393,49 @@ delete_record(Variable *variable, Datum value, bool is_null)
 	item = (HashRecordEntry *) hash_search(record->rhash, &k,
 										   HASH_REMOVE, &found);
 	if (found)
-		heap_freetuple(item->tuple);
+		pfree(DatumGetPointer(item->tuple));
 
 	return found;
+}
+
+/*
+ * Copy record using src_tuple.
+ */
+void
+insert_record_copy(RecordVar *dest_record, Datum src_tuple, Variable *variable)
+{
+	Datum		tuple;
+	Datum		value;
+	bool		isnull;
+	HashRecordKey k;
+	HashRecordEntry *item;
+	bool		found;
+	MemoryContext oldcxt;
+
+	oldcxt = MemoryContextSwitchTo(dest_record->hctx);
+
+	/* Inserting a new record into dest_record */
+	tuple = copy_record_tuple(dest_record,
+							  (HeapTupleHeader) DatumGetPointer(src_tuple));
+	value = get_record_key(tuple, dest_record->tupdesc, &isnull);
+
+	k.value = value;
+	k.is_null = isnull;
+	k.hash_proc = &dest_record->hash_proc;
+	k.cmp_proc = &dest_record->cmp_proc;
+
+	item = (HashRecordEntry *) hash_search(dest_record->rhash, &k,
+										   HASH_ENTER, &found);
+	if (found)
+	{
+		pfree(DatumGetPointer(tuple));
+		MemoryContextSwitchTo(oldcxt);
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("there is a record in the variable \"%s\" with same "
+						"key", GetName(variable))));
+	}
+	item->tuple = tuple;
+
+	MemoryContextSwitchTo(oldcxt);
 }

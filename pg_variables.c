@@ -606,7 +606,7 @@ variable_select(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		funcctx->tuple_desc = CreateTupleDescCopy(record->tupdesc);
+		funcctx->tuple_desc = record->tupdesc;
 
 		rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
 		hash_seq_init(rstat, record->rhash);
@@ -626,11 +626,10 @@ variable_select(PG_FUNCTION_ARGS)
 	item = (HashRecordEntry *) hash_seq_search(rstat);
 	if (item != NULL)
 	{
-		Datum		result;
+		Assert(!HeapTupleHeaderHasExternal(
+							(HeapTupleHeader) DatumGetPointer(item->tuple)));
 
-		result = HeapTupleGetDatum(item->tuple);
-
-		SRF_RETURN_NEXT(funcctx, result);
+		SRF_RETURN_NEXT(funcctx, item->tuple);
 	}
 	else
 	{
@@ -694,7 +693,12 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(var_name, 1);
 
 	if (found)
-		PG_RETURN_DATUM(HeapTupleGetDatum(item->tuple));
+	{
+		Assert(!HeapTupleHeaderHasExternal(
+							(HeapTupleHeader) DatumGetPointer(item->tuple)));
+
+		PG_RETURN_DATUM(item->tuple);
+	}
 	else
 		PG_RETURN_NULL();
 }
@@ -751,7 +755,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		funcctx->tuple_desc = CreateTupleDescCopy(GetActualValue(variable).record.tupdesc);
+		funcctx->tuple_desc = GetActualValue(variable).record.tupdesc;
 
 		var = (VariableIteratorRec *) palloc(sizeof(VariableIteratorRec));
 		var->iterator = array_create_iterator(values, 0, NULL);
@@ -784,11 +788,9 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 											   HASH_FIND, &found);
 		if (found)
 		{
-			Datum		result;
-
-			result = HeapTupleGetDatum(item->tuple);
-
-			SRF_RETURN_NEXT(funcctx, result);
+			Assert(!HeapTupleHeaderHasExternal(
+							(HeapTupleHeader) DatumGetPointer(item->tuple)));
+			SRF_RETURN_NEXT(funcctx, item->tuple);
 		}
 	}
 
@@ -1639,7 +1641,7 @@ copyValue(VarState *src, VarState *dest, Variable *destVar)
 		/* Copy previous history entry into the new one */
 		hash_seq_init(&rstat, record_src->rhash);
 		while ((item_src = (HashRecordEntry *) hash_seq_search(&rstat)) != NULL)
-			copy_record(record_dest, item_src->tuple, destVar);
+			insert_record_copy(record_dest, item_src->tuple, destVar);
 	}
 	else
 		/* copy scalar value */
