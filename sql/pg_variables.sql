@@ -206,6 +206,7 @@ $$BEGIN
     PERFORM pgv_select('vars3', 'r3');
 END$$;
 -- Check that the hash table was cleaned up after rollback
+SET client_min_messages to 'ERROR';
 SELECT pgv_select('vars3', 'r1', 1);
 SELECT pgv_select('vars3', 'r1') LIMIT 2; -- warning
 SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
@@ -218,6 +219,7 @@ SELECT pgv_select('vars3', 'r1');
 FETCH 1 in r1_cur;
 CLOSE r1_cur;
 COMMIT; -- warning
+RESET client_min_messages;
 
 -- Clean memory after unsuccessful creation of a variable
 SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
