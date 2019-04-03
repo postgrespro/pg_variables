@@ -730,7 +730,8 @@ SELECT pgv_select('vars3', 'r1', 1);
  
 (1 row)
 
-SELECT pgv_select('vars3', 'r1') LIMIT 2;
+SELECT pgv_select('vars3', 'r1') LIMIT 2; -- warning
+WARNING:  leaked hash_seq_search scan for hash table 0x561738129110
  pgv_select 
 ------------
  (,strNULL)
@@ -743,8 +744,34 @@ SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
  (0,str00)
 (1 row)
 
+-- PGPRO-2601 - Test a cursor with the hash table
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('vars3', 'r1');
+FETCH 1 in r1_cur;
+ pgv_select 
+------------
+ (,strNULL)
+(1 row)
+
+SELECT pgv_select('vars3', 'r1');
+ pgv_select 
+------------
+ (,strNULL)
+ (2,)
+ (0,str00)
+(3 rows)
+
+FETCH 1 in r1_cur;
+ pgv_select 
+------------
+ (2,)
+(1 row)
+
+CLOSE r1_cur;
+COMMIT; -- warning
+WARNING:  leaked hash_seq_search scan for hash table 0x561738129110
 -- Clean memory after unsuccessful creation of a variable
-SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
 ERROR:  could not identify a hash function for type unknown
 SELECT package FROM pgv_stats() WHERE package = 'vars4';
  package 

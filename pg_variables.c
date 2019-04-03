@@ -108,14 +108,6 @@ static Variable *LastVariable = NULL;
 /* Recent row type id */
 static Oid LastTypeId = InvalidOid;
 
-/*
- * Cache sequentially search through hash table status.  It is necessary for
- * clean up if hash_seq_term() wasn't called or if we didn't scan the whole
- * table. In this case we need to manually call hash_seq_term() within
- * variable_ExecutorEnd().
- */
-static HASH_SEQ_STATUS *LastHSeqStatus = NULL;
-
 /* Saved hook values for recall */
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
@@ -615,8 +607,6 @@ variable_select(PG_FUNCTION_ARGS)
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
 		PG_FREE_IF_COPY(var_name, 1);
-
-		LastHSeqStatus = rstat;
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
@@ -633,7 +623,6 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		LastHSeqStatus = NULL;
 		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -1212,8 +1201,6 @@ get_packages_stats(PG_FUNCTION_ARGS)
 			hash_seq_init(pstat, packagesHash);
 
 			funcctx->user_fctx = pstat;
-
-			LastHSeqStatus = pstat;
 		}
 		else
 			funcctx->user_fctx = NULL;
@@ -1260,7 +1247,6 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		LastHSeqStatus = NULL;
 		pfree(pstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -2126,7 +2112,6 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				break;
 		}
 	}
-	LastHSeqStatus = NULL;
 }
 
 /*
@@ -2155,7 +2140,6 @@ pgvTransCallback(XactEvent event, void *arg)
 				break;
 		}
 	}
-	LastHSeqStatus = NULL;
 }
 
 /*
@@ -2164,11 +2148,6 @@ pgvTransCallback(XactEvent event, void *arg)
 static void
 variable_ExecutorEnd(QueryDesc *queryDesc)
 {
-	if (LastHSeqStatus)
-	{
-		hash_seq_term(LastHSeqStatus);
-		LastHSeqStatus = NULL;
-	}
 	if (prev_ExecutorEnd)
 		prev_ExecutorEnd(queryDesc);
 	else

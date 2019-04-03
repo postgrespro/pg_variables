@@ -207,11 +207,20 @@ $$BEGIN
 END$$;
 -- Check that the hash table was cleaned up after rollback
 SELECT pgv_select('vars3', 'r1', 1);
-SELECT pgv_select('vars3', 'r1') LIMIT 2;
+SELECT pgv_select('vars3', 'r1') LIMIT 2; -- warning
 SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
 
+-- PGPRO-2601 - Test a cursor with the hash table
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('vars3', 'r1');
+FETCH 1 in r1_cur;
+SELECT pgv_select('vars3', 'r1');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+COMMIT; -- warning
+
 -- Clean memory after unsuccessful creation of a variable
-SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
 SELECT package FROM pgv_stats() WHERE package = 'vars4';
 
 -- Remove package if it is empty
