@@ -2088,6 +2088,15 @@ processChanges(Action action)
 	}
 }
 
+static void
+compatibility_check(void)
+{
+#ifdef PGPRO_EE
+	if (getNestLevelATX() != 0)
+		elog(ERROR, "pg_variable extension is not compatible with autonomous transactions and connection pooling");
+#endif
+}
+
 /*
  * Intercept execution during subtransaction processing
  */
@@ -2101,6 +2110,7 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 		{
 			case SUBXACT_EVENT_START_SUB:
 				pushChangesStack();
+				compatibility_check();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
 				processChanges(RELEASE_SAVEPOINT);
@@ -2125,6 +2135,7 @@ pgvTransCallback(XactEvent event, void *arg)
 		switch (event)
 		{
 			case XACT_EVENT_PRE_COMMIT:
+				compatibility_check();
 				processChanges(RELEASE_SAVEPOINT);
 				break;
 			case XACT_EVENT_ABORT:
