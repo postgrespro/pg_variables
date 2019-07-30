@@ -86,6 +86,19 @@ static void initObjectHistory(TransObject *object, TransObjectType type);
 /* Hook functions */
 static void variable_ExecutorEnd(QueryDesc *queryDesc);
 
+#if PG_VERSION_NUM >= 120000
+#define CHECK_ARGS_FOR_NULL() \
+do { \
+	if (fcinfo->args[0].isnull) \
+		ereport(ERROR, \
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
+				 errmsg("package name can not be NULL"))); \
+	if (fcinfo->args[1].isnull) \
+		ereport(ERROR, \
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
+				 errmsg("variable name can not be NULL"))); \
+} while(0)
+#else			/* PG_VERSION_NUM < 120000 */
 #define CHECK_ARGS_FOR_NULL() \
 do { \
 	if (fcinfo->argnull[0]) \
@@ -97,6 +110,7 @@ do { \
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
 				 errmsg("variable name can not be NULL"))); \
 } while(0)
+#endif			/* PG_VERSION_NUM */
 
 static HTAB *packagesHash = NULL;
 static MemoryContext ModuleContext = NULL;

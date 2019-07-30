@@ -137,7 +137,9 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 
 	oldcxt = MemoryContextSwitchTo(record->hctx);
 	record->tupdesc = CreateTupleDescCopy(tupdesc);
+#if PG_VERSION_NUM < 120000
 	record->tupdesc->tdhasoid = false;
+#endif
 	record->tupdesc->tdtypeid = RECORDOID;
 	record->tupdesc->tdtypmod = -1;
 	record->tupdesc = BlessTupleDesc(record->tupdesc);
