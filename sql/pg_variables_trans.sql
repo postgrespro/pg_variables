@@ -80,6 +80,8 @@ SELECT pgv_get_jsonb('vars2', 'j1');
 SELECT pgv_get_jsonb('vars2', 'j2');
 COMMIT;
 
+CREATE TABLE tab (id int, t varchar);
+INSERT INTO tab VALUES (0, 'str00'), (1, 'str33'), (2, NULL), (NULL, 'strNULL');
 
 BEGIN;
 SELECT pgv_insert('vars3', 'r1', tab, true) FROM tab;
@@ -481,5 +483,54 @@ SELECT pgv_remove('vars', 'any1');
 RELEASE comm;
 SELECT pgv_get('vars', 'any1',NULL::text);
 COMMIT;
+
+-- Tests for PGPRO-2440
+SELECT pgv_insert('vars3', 'r3', row(1 :: integer, NULL::varchar), true);
+BEGIN;
+SELECT pgv_insert('vars3', 'r3', row(2 :: integer, NULL::varchar), true);
+SAVEPOINT comm;
+SELECT pgv_insert('vars3', 'r3', row(3 :: integer, NULL::varchar), true);
+COMMIT;
+SELECT pgv_delete('vars3', 'r3', 3);
+
+BEGIN;
+SELECT pgv_set('vars1', 't1', ''::text);
+SELECT pgv_set('vars2', 't2', ''::text, true);
+SAVEPOINT sp1;
+SAVEPOINT sp2;
+SELECT pgv_free();
+ERROR;
+COMMIT;
+
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+SELECT pgv_free();
+SAVEPOINT sp_to_rollback;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ROLLBACK TO sp_to_rollback;
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+
+-- Package should exist after rollback if it contains regular variable
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text);
+ROLLBACK;
+SELECT package FROM pgv_stats() ORDER BY package;
+
+-- Package should not exist if it becomes empty in rolled back transaction
+BEGIN;
+SAVEPOINT comm2;
+SELECT pgv_remove('vars');
+ROLLBACK TO comm2;
+SELECT pgv_exists('vars');
+SELECT package FROM pgv_stats() ORDER BY package;
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+
+SELECT pgv_set('vars', 'any1', 'some value'::text);
+BEGIN;
+SELECT pgv_remove('vars');
+ROLLBACK;
+SELECT package FROM pgv_stats() ORDER BY package;
 
 SELECT pgv_free();

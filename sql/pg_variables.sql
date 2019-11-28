@@ -1,5 +1,12 @@
 CREATE EXTENSION pg_variables;
 
+-- Test packages - sanity checks
+SELECT pgv_free();
+SELECT pgv_exists(NULL); -- fail
+SELECT pgv_remove(NULL); -- fail
+SELECT pgv_remove('vars'); -- fail
+SELECT pgv_exists('vars111111111111111111111111111111111111111111111111111111111111'); -- fail
+
 -- Integer variables
 SELECT pgv_get_int('vars', 'int1');
 SELECT pgv_get_int('vars', 'int1', false);
@@ -152,18 +159,31 @@ SELECT pgv_insert('vars3', 'r1', tab) FROM tab;
 SELECT pgv_insert('vars3', 'r1', row(1, 'str1', 'str2'));
 SELECT pgv_insert('vars3', 'r1', row(1, 1));
 SELECT pgv_insert('vars3', 'r1', row('str1', 'str1'));
+SELECT pgv_select('vars3', 'r1', ARRAY[[1,2]]); -- fail
 
-SELECT pgv_select('vars3', 'r1') LIMIT 2;
-SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+-- Test variables caching
+SELECT pgv_insert('vars3', 'r2', row(1, 'str1', 'str2'));
+SELECT pgv_update('vars3', 'r1', row(3, 'str22'::varchar));
+SELECT pgv_update('vars4', 'r1', row(3, 'str22'::varchar)); -- fail
+select pgv_delete('vars3', 'r2', NULL::int);
+select pgv_delete('vars4', 'r2', NULL::int); -- fail
+
+-- Test NULL values
+SELECT pgv_insert('vars3', 'r2', NULL); -- fail
+SELECT pgv_update('vars3', 'r2', NULL); -- fail
+select pgv_delete('vars3', 'r2', NULL::int);
+SELECT pgv_select('vars3', 'r1', NULL::int[]); -- fail
 
 SELECT pgv_select('vars3', 'r1');
 SELECT pgv_select('vars3', 'r1', 1);
+SELECT pgv_select('vars3', 'r1', 1::float); -- fail
 SELECT pgv_select('vars3', 'r1', 0);
 SELECT pgv_select('vars3', 'r1', NULL::int);
 SELECT pgv_select('vars3', 'r1', ARRAY[1, 0, NULL]);
 
 UPDATE tab SET t = 'str33' WHERE id = 1;
 SELECT pgv_update('vars3', 'r1', tab) FROM tab;
+SELECT pgv_update('vars3', 'r1', row(4, 'str44'::varchar));
 SELECT pgv_select('vars3', 'r1');
 
 SELECT pgv_delete('vars3', 'r1', 1);
@@ -174,6 +194,51 @@ SELECT pgv_select('vars3', 'r3');
 SELECT pgv_exists('vars3', 'r3');
 SELECT pgv_exists('vars3', 'r1');
 SELECT pgv_select('vars2', 'j1');
+
+-- PGPRO-2601 - Test pgv_select() on TupleDesc of dropped table
+DROP TABLE tab;
+SELECT pgv_select('vars3', 'r1');
+
+-- Tests for SRF's sequential scan of an internal hash table
+DO
+$$BEGIN
+    PERFORM pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+    PERFORM pgv_select('vars3', 'r3');
+END$$;
+-- Check that the hash table was cleaned up after rollback
+SET client_min_messages to 'ERROR';
+SELECT pgv_select('vars3', 'r1', 1);
+SELECT pgv_select('vars3', 'r1') LIMIT 2; -- warning
+SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+
+-- PGPRO-2601 - Test a cursor with the hash table
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('vars3', 'r1');
+FETCH 1 in r1_cur;
+SELECT pgv_select('vars3', 'r1');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+COMMIT; -- warning
+RESET client_min_messages;
+
+-- Clean memory after unsuccessful creation of a variable
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+
+-- Remove package if it is empty
+SELECT pgv_insert('vars4', 'r2', row(1, 'str1', 'str2'));
+SELECT pgv_remove('vars4', 'r2');
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+
+-- Record variables as scalar
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'));
+SELECT pgv_get('vars5', 'r1', NULL::record);
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'), true); -- fail
+
+SELECT pgv_insert('vars5', 'r1', row(1, 'str11')); -- fail
+SELECT pgv_select('vars5', 'r1'); -- fail
+
+SELECT pgv_get('vars3', 'r1', NULL::record); -- fail
 
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;

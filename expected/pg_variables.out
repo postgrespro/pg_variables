@@ -1,4 +1,19 @@
 CREATE EXTENSION pg_variables;
+-- Test packages - sanity checks
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+SELECT pgv_exists(NULL); -- fail
+ERROR:  package name can not be NULL
+SELECT pgv_remove(NULL); -- fail
+ERROR:  package name can not be NULL
+SELECT pgv_remove('vars'); -- fail
+ERROR:  unrecognized package "vars"
+SELECT pgv_exists('vars111111111111111111111111111111111111111111111111111111111111'); -- fail
+ERROR:  name "vars111111111111111111111111111111111111111111111111111111111111" is too long
 -- Integer variables
 SELECT pgv_get_int('vars', 'int1');
 ERROR:  unrecognized package "vars"
@@ -553,20 +568,44 @@ SELECT pgv_insert('vars3', 'r1', row(1, 1));
 ERROR:  new record structure differs from variable "r1" structure
 SELECT pgv_insert('vars3', 'r1', row('str1', 'str1'));
 ERROR:  new record structure differs from variable "r1" structure
-SELECT pgv_select('vars3', 'r1') LIMIT 2;
- pgv_select 
+SELECT pgv_select('vars3', 'r1', ARRAY[[1,2]]); -- fail
+ERROR:  searching for elements in multidimensional arrays is not supported
+-- Test variables caching
+SELECT pgv_insert('vars3', 'r2', row(1, 'str1', 'str2'));
+ pgv_insert 
 ------------
- (,strNULL)
- (1,str11)
-(2 rows)
+ 
+(1 row)
 
-SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
- pgv_select 
+SELECT pgv_update('vars3', 'r1', row(3, 'str22'::varchar));
+ pgv_update 
 ------------
- (2,)
- (0,str00)
-(2 rows)
+ f
+(1 row)
 
+SELECT pgv_update('vars4', 'r1', row(3, 'str22'::varchar)); -- fail
+ERROR:  unrecognized package "vars4"
+select pgv_delete('vars3', 'r2', NULL::int);
+ pgv_delete 
+------------
+ f
+(1 row)
+
+select pgv_delete('vars4', 'r2', NULL::int); -- fail
+ERROR:  unrecognized package "vars4"
+-- Test NULL values
+SELECT pgv_insert('vars3', 'r2', NULL); -- fail
+ERROR:  record argument can not be NULL
+SELECT pgv_update('vars3', 'r2', NULL); -- fail
+ERROR:  record argument can not be NULL
+select pgv_delete('vars3', 'r2', NULL::int);
+ pgv_delete 
+------------
+ f
+(1 row)
+
+SELECT pgv_select('vars3', 'r1', NULL::int[]); -- fail
+ERROR:  array argument can not be NULL
 SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
@@ -582,6 +621,8 @@ SELECT pgv_select('vars3', 'r1', 1);
  (1,str11)
 (1 row)
 
+SELECT pgv_select('vars3', 'r1', 1::float); -- fail
+ERROR:  requested value type differs from variable "r1" key type
 SELECT pgv_select('vars3', 'r1', 0);
  pgv_select 
 ------------
@@ -611,6 +652,12 @@ SELECT pgv_update('vars3', 'r1', tab) FROM tab;
  t
  t
 (4 rows)
+
+SELECT pgv_update('vars3', 'r1', row(4, 'str44'::varchar));
+ pgv_update 
+------------
+ f
+(1 row)
 
 SELECT pgv_select('vars3', 'r1');
  pgv_select 
@@ -657,6 +704,119 @@ SELECT pgv_exists('vars3', 'r1');
 
 SELECT pgv_select('vars2', 'j1');
 ERROR:  variable "j1" requires "jsonb" value
+-- PGPRO-2601 - Test pgv_select() on TupleDesc of dropped table
+DROP TABLE tab;
+SELECT pgv_select('vars3', 'r1');
+ pgv_select 
+------------
+ (,strNULL)
+ (2,)
+ (0,str00)
+(3 rows)
+
+-- Tests for SRF's sequential scan of an internal hash table
+DO
+$$BEGIN
+    PERFORM pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+    PERFORM pgv_select('vars3', 'r3');
+END$$;
+ERROR:  unrecognized variable "r3"
+CONTEXT:  SQL statement "SELECT pgv_select('vars3', 'r3')"
+PL/pgSQL function inline_code_block line 3 at PERFORM
+-- Check that the hash table was cleaned up after rollback
+SET client_min_messages to 'ERROR';
+SELECT pgv_select('vars3', 'r1', 1);
+ pgv_select 
+------------
+ 
+(1 row)
+
+SELECT pgv_select('vars3', 'r1') LIMIT 2; -- warning
+ pgv_select 
+------------
+ (,strNULL)
+ (2,)
+(2 rows)
+
+SELECT pgv_select('vars3', 'r1') LIMIT 2 OFFSET 2;
+ pgv_select 
+------------
+ (0,str00)
+(1 row)
+
+-- PGPRO-2601 - Test a cursor with the hash table
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('vars3', 'r1');
+FETCH 1 in r1_cur;
+ pgv_select 
+------------
+ (,strNULL)
+(1 row)
+
+SELECT pgv_select('vars3', 'r1');
+ pgv_select 
+------------
+ (,strNULL)
+ (2,)
+ (0,str00)
+(3 rows)
+
+FETCH 1 in r1_cur;
+ pgv_select 
+------------
+ (2,)
+(1 row)
+
+CLOSE r1_cur;
+COMMIT; -- warning
+RESET client_min_messages;
+-- Clean memory after unsuccessful creation of a variable
+SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
+ERROR:  could not identify a hash function for type unknown
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+ package 
+---------
+(0 rows)
+
+-- Remove package if it is empty
+SELECT pgv_insert('vars4', 'r2', row(1, 'str1', 'str2'));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_remove('vars4', 'r2');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+SELECT package FROM pgv_stats() WHERE package = 'vars4';
+ package 
+---------
+(0 rows)
+
+-- Record variables as scalar
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'));
+ pgv_set 
+---------
+ 
+(1 row)
+
+SELECT pgv_get('vars5', 'r1', NULL::record);
+  pgv_get  
+-----------
+ (1,str11)
+(1 row)
+
+SELECT pgv_set('vars5', 'r1', row(1, 'str11'), true); -- fail
+ERROR:  variable "r1" already created as NOT TRANSACTIONAL
+SELECT pgv_insert('vars5', 'r1', row(1, 'str11')); -- fail
+ERROR:  "r1" isn't a record variable
+SELECT pgv_select('vars5', 'r1'); -- fail
+ERROR:  "r1" isn't a record variable
+SELECT pgv_get('vars3', 'r1', NULL::record); -- fail
+ERROR:  "r1" isn't a scalar variable
 -- Manipulate variables
 SELECT * FROM pgv_list() order by package, name;
  package |   name   | is_transactional 
@@ -683,7 +843,9 @@ SELECT * FROM pgv_list() order by package, name;
  vars2   | j1       | f
  vars2   | j2       | f
  vars3   | r1       | f
-(22 rows)
+ vars3   | r2       | f
+ vars5   | r1       | f
+(24 rows)
 
 SELECT package FROM pgv_stats() order by package;
  package 
@@ -691,7 +853,8 @@ SELECT package FROM pgv_stats() order by package;
  vars
  vars2
  vars3
-(3 rows)
+ vars5
+(4 rows)
 
 SELECT pgv_remove('vars', 'int3');
 ERROR:  unrecognized variable "int3"
@@ -745,7 +908,9 @@ SELECT * FROM pgv_list() order by package, name;
  vars    | tstz2    | f
  vars    | tstzNULL | f
  vars3   | r1       | f
-(19 rows)
+ vars3   | r2       | f
+ vars5   | r1       | f
+(21 rows)
 
 SELECT pgv_free();
  pgv_free 

@@ -416,6 +416,8 @@ SELECT pgv_get_jsonb('vars2', 'j2');
 (1 row)
 
 COMMIT;
+CREATE TABLE tab (id int, t varchar);
+INSERT INTO tab VALUES (0, 'str00'), (1, 'str33'), (2, NULL), (NULL, 'strNULL');
 BEGIN;
 SELECT pgv_insert('vars3', 'r1', tab, true) FROM tab;
  pgv_insert 
@@ -452,8 +454,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -462,8 +464,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -473,8 +475,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -483,8 +485,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -824,8 +826,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -833,8 +835,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -843,8 +845,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -853,8 +855,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1035,7 +1037,7 @@ SELECT pgv_get('vars2', 'any1',NULL::text);
 ROLLBACK TO sp1;
 COMMIT;
 SELECT pgv_get('vars2', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars2"
 SELECT pgv_free();
  pgv_free 
 ----------
@@ -1132,8 +1134,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1142,8 +1144,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1153,8 +1155,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1163,8 +1165,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1230,8 +1232,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1239,8 +1241,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1249,8 +1251,8 @@ SELECT pgv_select('vars3', 'r1');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,str55)
  (0,str00)
 (5 rows)
@@ -1259,8 +1261,8 @@ SELECT pgv_select('vars3', 'r2');
  pgv_select 
 ------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (0,str00)
 (4 rows)
 
@@ -1385,7 +1387,7 @@ SELECT pgv_get('vars2', 'any1',NULL::text);
 
 ROLLBACK;
 SELECT pgv_get('vars2', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars2"
 SELECT pgv_free();
  pgv_free 
 ----------
@@ -1436,8 +1438,8 @@ SELECT pgv_select('vars3', 'r1');
         pgv_select         
 ---------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1447,8 +1449,8 @@ SELECT pgv_select('vars3', 'r1');
         pgv_select         
 ---------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1458,8 +1460,8 @@ SELECT pgv_select('vars3', 'r1');
         pgv_select         
 ---------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1469,8 +1471,8 @@ SELECT pgv_select('vars3', 'r1');
               pgv_select              
 --------------------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
  (7,"row after sp2 to remove in sp4")
@@ -1481,8 +1483,8 @@ SELECT pgv_select('vars3', 'r1');
               pgv_select              
 --------------------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"after savepoint sp1")
  (0,str00)
  (7,"row after sp2 to remove in sp4")
@@ -1493,8 +1495,8 @@ SELECT pgv_select('vars3', 'r1');
          pgv_select         
 ----------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"before savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1504,8 +1506,8 @@ SELECT pgv_select('vars3', 'r1');
          pgv_select         
 ----------------------------
  (,strNULL)
- (2,)
  (1,str33)
+ (2,)
  (5,"before savepoint sp1")
  (0,str00)
 (5 rows)
@@ -1652,7 +1654,7 @@ SELECT pgv_exists('vars', 'any1');
 (1 row)
 
 SELECT pgv_get('vars', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars"
 SELECT * FROM pgv_list() ORDER BY package, name;
  package | name | is_transactional 
 ---------+------+------------------
@@ -1794,7 +1796,8 @@ SELECT package FROM pgv_stats() ORDER BY package;
  package 
 ---------
  vars
-(1 row)
+ vars2
+(2 rows)
 
 SELECT * FROM pgv_list() ORDER BY package, name;
  package | name | is_transactional 
@@ -1858,7 +1861,7 @@ SELECT pgv_insert('package', 'errs',row(1), true);
 SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
 ERROR:  could not identify a hash function for type unknown
 SELECT pgv_select('vars4', 'r1', 0);
-ERROR:  unrecognized variable "r1"
+ERROR:  unrecognized package "vars4"
 -- If variable created and removed in same transaction level,
 -- it should be totally removed and should not be present
 -- in changes list and cache.
@@ -1878,8 +1881,151 @@ SELECT pgv_remove('vars', 'any1');
 
 RELEASE comm;
 SELECT pgv_get('vars', 'any1',NULL::text);
-ERROR:  unrecognized variable "any1"
+ERROR:  unrecognized package "vars"
 COMMIT;
+-- Tests for PGPRO-2440
+SELECT pgv_insert('vars3', 'r3', row(1 :: integer, NULL::varchar), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+BEGIN;
+SELECT pgv_insert('vars3', 'r3', row(2 :: integer, NULL::varchar), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SAVEPOINT comm;
+SELECT pgv_insert('vars3', 'r3', row(3 :: integer, NULL::varchar), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+COMMIT;
+SELECT pgv_delete('vars3', 'r3', 3);
+ pgv_delete 
+------------
+ t
+(1 row)
+
+BEGIN;
+SELECT pgv_set('vars1', 't1', ''::text);
+ pgv_set 
+---------
+ 
+(1 row)
+
+SELECT pgv_set('vars2', 't2', ''::text, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+SAVEPOINT sp1;
+SAVEPOINT sp2;
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+ERROR;
+ERROR:  syntax error at or near "ERROR"
+LINE 1: ERROR;
+        ^
+COMMIT;
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+SAVEPOINT sp_to_rollback;
+SELECT pgv_set('vars', 'any1', 'some value'::text, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+ROLLBACK TO sp_to_rollback;
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+ package 
+---------
+(0 rows)
+
+-- Package should exist after rollback if it contains regular variable
+BEGIN;
+SELECT pgv_set('vars', 'any1', 'some value'::text);
+ pgv_set 
+---------
+ 
+(1 row)
+
+ROLLBACK;
+SELECT package FROM pgv_stats() ORDER BY package;
+ package 
+---------
+ vars
+(1 row)
+
+-- Package should not exist if it becomes empty in rolled back transaction
+BEGIN;
+SAVEPOINT comm2;
+SELECT pgv_remove('vars');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+ROLLBACK TO comm2;
+SELECT pgv_exists('vars');
+ pgv_exists 
+------------
+ f
+(1 row)
+
+SELECT package FROM pgv_stats() ORDER BY package;
+ package 
+---------
+ vars
+(1 row)
+
+COMMIT;
+SELECT package FROM pgv_stats() ORDER BY package;
+ package 
+---------
+(0 rows)
+
+SELECT pgv_set('vars', 'any1', 'some value'::text);
+ pgv_set 
+---------
+ 
+(1 row)
+
+BEGIN;
+SELECT pgv_remove('vars');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+ROLLBACK;
+SELECT package FROM pgv_stats() ORDER BY package;
+ package 
+---------
+(0 rows)
+
 SELECT pgv_free();
  pgv_free 
 ----------

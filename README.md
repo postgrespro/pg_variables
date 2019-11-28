@@ -38,6 +38,10 @@ SELECT pgv_get('vars', 'trans_int', NULL::int);
      101
 ```
 
+You can aggregate variables into packages. This is done to be able to have
+variables with different names or to quickly remove the whole batch of
+variables. If the package becomes empty, it is automatically deleted.
+
 ## License
 
 This module available under the [license](LICENSE) similar to
@@ -56,7 +60,7 @@ Typical installation procedure may look like this:
 ## Module functions
 
 The functions provided by the **pg_variables** module are shown in the tables
-below. The module supports the following scalar and record types.
+below.
 
 To use **pgv_get()** function required package and variable must exists. It is
 necessary to set variable with **pgv_set()** function to use **pgv_get()**
@@ -97,6 +101,28 @@ Function | Returns
 -------- | -------
 `pgv_set(package text, name text, value anyarray, is_transactional bool default false)` | `void`
 `pgv_get(package text, name text, var_type anyarray, strict bool default true)` | `anyarray`
+
+`pgv_set` arguments:
+- `package` - name of the package, it will be created if it doesn't exist.
+- `name` - name of the variable, it will be created if it doesn't exist.
+`pgv_set` fails if the variable already exists and its transactionality doesn't
+match `is_transactional` argument.
+- `value` - new value for the variable. `pgv_set` fails if the variable already
+exists and its type doesn't match new value's type.
+- `is_transactional` - transactionality of the newly created variable, by
+default it is false.
+
+`pgv_get` arguments:
+- `package` - name of the existing package. If the package doesn't exist result
+depends on `strict` argument: if it is false then `pgv_get` returns NULL
+otherwise it fails.
+- `name` - name of the the existing variable. If the variable doesn't exist
+result depends on `strict` argument: if it is false then `pgv_get` returns NULL
+otherwise it fails.
+- `var_type` - type of the existing variable. It is necessary to pass it to get
+correct return type.
+- `strict` - pass false if `pgv_get` shouldn't raise an error if a variable or a
+package didn't created before, by default it is true.
 
 ## **Deprecated** scalar variables functions
 

@@ -63,7 +63,8 @@ typedef struct TransState
 /* List node that stores one of the package's states */
 typedef struct PackState
 {
-	TransState	state;
+	TransState		state;
+	unsigned long	trans_var_num; /* Number of valid transactional variables */
 }			PackState;
 
 /* List node that stores one of the variable's states */
@@ -101,6 +102,11 @@ typedef struct Variable
 	TransObject transObject;
 	Package    *package;
 	Oid			typid;
+	/*
+	 * We need an additional flag to determine variable's type since we can
+	 * store record type DATUM within scalar variable
+	 */
+	bool		is_record;
 
 	/*
 	 * The flag determines the further behavior of the variable. Can be
@@ -122,7 +128,7 @@ typedef struct HashRecordKey
 typedef struct HashRecordEntry
 {
 	HashRecordKey key;
-	HeapTuple	tuple;
+	Datum		tuple;
 }			HashRecordEntry;
 
 /* Element of list with objects created, changed or removed within transaction */
@@ -155,6 +161,8 @@ extern void check_record_key(Variable *variable, Oid typid);
 extern void insert_record(Variable *variable, HeapTupleHeader tupleHeader);
 extern bool update_record(Variable *variable, HeapTupleHeader tupleHeader);
 extern bool delete_record(Variable *variable, Datum value, bool is_null);
+extern void insert_record_copy(RecordVar *dest_record, Datum src_tuple,
+							   Variable *variable);
 extern void removeObject(TransObject *object, TransObjectType type);
 
 #define GetActualState(object) \
@@ -163,12 +171,11 @@ extern void removeObject(TransObject *object, TransObjectType type);
 #define GetActualValue(variable) \
 	(((VarState *) GetActualState(variable))->value)
 
+#define GetPackState(package) \
+	(((PackState *) GetActualState(package)))
+
 #define GetName(object) \
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
 	 object->transObject.name)
-
-#define GetStateStorage(object) \
-	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
-	 &(object->transObject.states))
 
 #endif							/* __PG_VARIABLES_H__ */
