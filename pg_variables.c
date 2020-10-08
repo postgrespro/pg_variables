@@ -2106,8 +2106,11 @@ static void
 compatibility_check(void)
 {
 #ifdef PGPRO_EE
-	if (getNestLevelATX() != 0)
-		elog(ERROR, "pg_variable extension is not compatible with autonomous transactions and connection pooling");
+#	if (PG_VERSION_NUM < 130000) || \
+		((PG_VERSION_NUM >= 130000) && (defined PGPRO_FEATURE_ATX))
+		if (getNestLevelATX() != 0)
+				elog(ERROR, "pg_variable extension is not compatible with autonomous transactions and connection pooling");
+#	endif
 #endif
 }
 
