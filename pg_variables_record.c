@@ -11,7 +11,18 @@
 #include "funcapi.h"
 
 #include "access/htup_details.h"
-#include "access/tuptoaster.h"
+/*
+ * See https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=8b94dab06617ef80a0901ab103ebd8754427ef
+ *
+ * Split tuptoaster.c into three separate files.
+ */
+#if PG_VERSION_NUM >= 130000
+#	include "access/detoast.h"
+#	include "access/heaptoast.h"
+#else
+#	include "access/tuptoaster.h"
+#endif
+
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "utils/builtins.h"
