@@ -534,3 +534,39 @@ ROLLBACK;
 SELECT package FROM pgv_stats() ORDER BY package;
 
 SELECT pgv_free();
+
+-- Variables should be insertable after pgv_remove
+BEGIN;
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+SELECT pgv_remove('test', 'x');
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+ROLLBACK;
+
+SELECT * FROM pgv_list() order by package, name;
+
+BEGIN;
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+SELECT pgv_remove('test', 'x');
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+COMMIT;
+
+SELECT * FROM pgv_list() order by package, name;
+
+-- Variables should be insertable after pgv_free
+BEGIN;
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+SELECT pgv_free();
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+ROLLBACK;
+
+SELECT * FROM pgv_list() order by package, name;
+
+BEGIN;
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+SELECT pgv_free();
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+COMMIT;
+
+SELECT * FROM pgv_list() order by package, name;
+
+SELECT pgv_free();

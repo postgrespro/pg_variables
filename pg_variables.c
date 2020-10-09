@@ -403,7 +403,10 @@ variable_insert(PG_FUNCTION_ARGS)
 		 * record type or if last record has different id.
 		 */
 		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
-		check_attributes(variable, tupdesc);
+		if (variable->is_deleted)
+			init_record(record, tupdesc, variable);
+		else
+			check_attributes(variable, tupdesc);
 	}
 
 	LastTypeId = tupType;
@@ -901,6 +904,7 @@ remove_variable(PG_FUNCTION_ARGS)
 			createSavepoint(transObject, TRANS_VARIABLE);
 			addToChangesStack(transObject, TRANS_VARIABLE);
 		}
+		variable->is_deleted = true;
 		GetActualState(variable)->is_valid = false;
 		GetPackState(package)->trans_var_num--;
 		if ((GetPackState(package)->trans_var_num + numOfRegVars(package)) == 0)
@@ -909,7 +913,7 @@ remove_variable(PG_FUNCTION_ARGS)
 	else
 		removeObject(&variable->transObject, TRANS_VARIABLE);
 
-	resetVariablesCache(false);
+	resetVariablesCache(true);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -945,7 +949,27 @@ remove_package(PG_FUNCTION_ARGS)
 static void
 removePackageInternal(Package *package)
 {
-	TransObject *transObject;
+	TransObject			*transObject;
+	Variable			*variable;
+	HTAB				*htab;
+	HASH_SEQ_STATUS		 vstat;
+	int					 i;
+
+	/* Set all the variables from package is deleted */
+	for (i = 0; i < 2; i++)
+	{
+		if ((htab = pack_htab(package, i)) != NULL)
+		{
+			hash_seq_init(&vstat, htab);
+
+			while ((variable =
+					(Variable *) hash_seq_search(&vstat)) != NULL)
+			{
+				if (GetActualState(variable)->is_valid)
+					variable->is_deleted = true;
+			}
+		}
+	}
 
 	/* All regular variables will be freed */
 	if (package->hctxRegular)
@@ -1596,6 +1620,7 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 		variable->package = package;
 		variable->is_record = is_record;
 		variable->is_transactional = is_transactional;
+		variable->is_deleted = false;
 		initObjectHistory(transObject, TRANS_VARIABLE);
 
 		if (!isObjectChangedInCurrentTrans(&package->transObject))

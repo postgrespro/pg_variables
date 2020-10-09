@@ -2032,3 +2032,114 @@ SELECT pgv_free();
  
 (1 row)
 
+-- Variables should be insertable after pgv_remove
+BEGIN;
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_remove('test', 'x');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+ROLLBACK;
+SELECT * FROM pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+(0 rows)
+
+BEGIN;
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_remove('test', 'x');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+COMMIT;
+SELECT * FROM pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+ test    | x    | t
+(1 row)
+
+-- Variables should be insertable after pgv_free
+BEGIN;
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+ROLLBACK;
+SELECT * FROM pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+ test    | x    | t
+(1 row)
+
+BEGIN;
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+COMMIT;
+SELECT * FROM pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+ test    | y    | t
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
