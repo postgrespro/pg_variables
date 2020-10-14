@@ -2034,7 +2034,7 @@ SELECT pgv_free();
 
 -- Variables should be insertable after pgv_remove
 BEGIN;
-SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2046,7 +2046,7 @@ SELECT pgv_remove('test', 'x');
  
 (1 row)
 
-SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (3::int, 4::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2059,7 +2059,7 @@ SELECT * FROM pgv_list() order by package, name;
 (0 rows)
 
 BEGIN;
-SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2071,7 +2071,7 @@ SELECT pgv_remove('test', 'x');
  
 (1 row)
 
-SELECT pgv_insert('test', 'x', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (3::int, 4::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2086,7 +2086,7 @@ SELECT * FROM pgv_list() order by package, name;
 
 -- Variables should be insertable after pgv_free
 BEGIN;
-SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2098,7 +2098,7 @@ SELECT pgv_free();
  
 (1 row)
 
-SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'y', ROW (3::int, 4::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2112,7 +2112,7 @@ SELECT * FROM pgv_list() order by package, name;
 (1 row)
 
 BEGIN;
-SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
  pgv_insert 
 ------------
  
@@ -2124,7 +2124,7 @@ SELECT pgv_free();
  
 (1 row)
 
-SELECT pgv_insert('test', 'y', ROW (1::int), TRUE);
+SELECT pgv_insert('test', 'y', ROW (3::int, 4::int), TRUE);
  pgv_insert 
 ------------
  

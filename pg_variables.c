@@ -56,7 +56,7 @@ static Variable *getVariableInternal(Package *package, text *name,
 static Variable *createVariableInternal(Package *package, text *name, Oid typid,
 										bool is_record, bool is_transactional);
 static void removePackageInternal(Package *package);
-static void resetVariablesCache(bool with_package);
+static void resetVariablesCache(void);
 
 /* Functions to work with transactional objects */
 static void createSavepoint(TransObject *object, TransObjectType type);
@@ -913,7 +913,7 @@ remove_variable(PG_FUNCTION_ARGS)
 	else
 		removeObject(&variable->transObject, TRANS_VARIABLE);
 
-	resetVariablesCache(true);
+	resetVariablesCache();
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_FREE_IF_COPY(var_name, 1);
@@ -940,7 +940,7 @@ remove_package(PG_FUNCTION_ARGS)
 	package = getPackage(package_name, true);
 	removePackageInternal(package);
 
-	resetVariablesCache(true);
+	resetVariablesCache();
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
@@ -955,7 +955,7 @@ removePackageInternal(Package *package)
 	HASH_SEQ_STATUS		 vstat;
 	int					 i;
 
-	/* Set all the variables from package is deleted */
+	/* Mark all the valid variables from package as deleted */
 	for (i = 0; i < 2; i++)
 	{
 		if ((htab = pack_htab(package, i)) != NULL)
@@ -1007,11 +1007,10 @@ isPackageEmpty(Package *package)
  * of some changes: removing, rollbacking, etc.
  */
 static void
-resetVariablesCache(bool with_package)
+resetVariablesCache(void)
 {
 	/* Remove package and variable from cache */
-	if (with_package)
-		LastPackage = NULL;
+	LastPackage = NULL;
 	LastVariable = NULL;
 	LastTypeId = InvalidOid;
 }
@@ -1037,7 +1036,7 @@ remove_packages(PG_FUNCTION_ARGS)
 		removePackageInternal(package);
 	}
 
-	resetVariablesCache(true);
+	resetVariablesCache();
 
 	PG_RETURN_VOID();
 }
@@ -1753,7 +1752,7 @@ removeObject(TransObject *object, TransObjectType type)
 		GetActualState(&package->transObject)->is_valid = false;
 	}
 
-	resetVariablesCache(true);
+	resetVariablesCache();
 }
 
 /*
@@ -2121,7 +2120,7 @@ processChanges(Action action)
 		MemoryContextDelete(ModuleContext);
 		packagesHash = NULL;
 		ModuleContext = NULL;
-		resetVariablesCache(true);
+		resetVariablesCache();
 		changesStack = NULL;
 		changesStackContext = NULL;
 	}
