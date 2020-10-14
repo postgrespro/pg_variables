@@ -535,38 +535,82 @@ SELECT package FROM pgv_stats() ORDER BY package;
 
 SELECT pgv_free();
 
--- Variables should be insertable after pgv_remove
+-- Variables should be insertable after pgv_remove (variable)
 BEGIN;
 SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+SELECT pgv_select('test', 'x');
 SELECT pgv_remove('test', 'x');
-SELECT pgv_insert('test', 'x', ROW (3::int, 4::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (1::int, 3::int), TRUE);
+SELECT pgv_select('test', 'x');
+SELECT pgv_insert('test', 'x', ROW (2::int, 4::int), TRUE);
+SELECT pgv_select('test', 'x');
 ROLLBACK;
 
 SELECT * FROM pgv_list() order by package, name;
 
 BEGIN;
 SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+SELECT pgv_select('test', 'x');
 SELECT pgv_remove('test', 'x');
-SELECT pgv_insert('test', 'x', ROW (3::int, 4::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (1::int, 3::int), TRUE);
+SELECT pgv_select('test', 'x');
+SELECT pgv_insert('test', 'x', ROW (2::int, 4::int), TRUE);
+SELECT pgv_select('test', 'x');
 COMMIT;
 
 SELECT * FROM pgv_list() order by package, name;
+SELECT pgv_select('test', 'x');
+
+-- Variables should be insertable after pgv_remove (package)
+BEGIN;
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test');
+SELECT pgv_insert('test', 'y', ROW (1::int, 3::int), TRUE);
+SELECT pgv_select('test', 'y');
+SELECT pgv_insert('test', 'y', ROW (2::int, 4::int), TRUE);
+SELECT pgv_select('test', 'y');
+ROLLBACK;
+
+SELECT * FROM pgv_list() order by package, name;
+
+BEGIN;
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test');
+SELECT pgv_insert('test', 'y', ROW (1::int, 3::int), TRUE);
+SELECT pgv_select('test', 'y');
+SELECT pgv_insert('test', 'y', ROW (2::int, 4::int), TRUE);
+SELECT pgv_select('test', 'y');
+COMMIT;
+
+SELECT * FROM pgv_list() order by package, name;
+SELECT pgv_select('test', 'y');
 
 -- Variables should be insertable after pgv_free
 BEGIN;
-SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'z', ROW (1::int, 2::int), TRUE);
+SELECT pgv_select('test', 'z');
 SELECT pgv_free();
-SELECT pgv_insert('test', 'y', ROW (3::int, 4::int), TRUE);
+SELECT pgv_insert('test', 'z', ROW (1::int, 3::int), TRUE);
+SELECT pgv_select('test', 'z');
+SELECT pgv_insert('test', 'z', ROW (2::int, 4::int), TRUE);
+SELECT pgv_select('test', 'z');
 ROLLBACK;
 
 SELECT * FROM pgv_list() order by package, name;
 
 BEGIN;
-SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'z', ROW (1::int, 2::int), TRUE);
+SELECT pgv_select('test', 'z');
 SELECT pgv_free();
-SELECT pgv_insert('test', 'y', ROW (3::int, 4::int), TRUE);
+SELECT pgv_insert('test', 'z', ROW (1::int, 3::int), TRUE);
+SELECT pgv_select('test', 'z');
+SELECT pgv_insert('test', 'z', ROW (2::int, 4::int), TRUE);
+SELECT pgv_select('test', 'z');
 COMMIT;
 
 SELECT * FROM pgv_list() order by package, name;
+SELECT pgv_select('test', 'z');
 
 SELECT pgv_free();

@@ -404,9 +404,14 @@ variable_insert(PG_FUNCTION_ARGS)
 		 */
 		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 		if (variable->is_deleted)
+		{
 			init_record(record, tupdesc, variable);
+			variable->is_deleted = false;
+		}
 		else
+		{
 			check_attributes(variable, tupdesc);
+		}
 	}
 
 	LastTypeId = tupType;
