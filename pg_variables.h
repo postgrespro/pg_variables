@@ -113,6 +113,7 @@ typedef struct Variable
 	 * specified only when creating a variable.
 	 */
 	bool		is_transactional;
+	bool		is_deleted;
 }			Variable;
 
 typedef struct HashRecordKey
