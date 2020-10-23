@@ -129,6 +129,9 @@ static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static dlist_head *changesStack = NULL;
 static MemoryContext changesStackContext = NULL;
 
+/* List to store all the running hash_seq_search scan for hash table */
+static List *rstats = NIL; 
+
 /* Returns a lists of packages and variables changed at current subxact level */
 #define get_actual_changes_list() \
 	( \
@@ -595,10 +598,10 @@ variable_select(PG_FUNCTION_ARGS)
 	FuncCallContext *funcctx;
 	HASH_SEQ_STATUS *rstat;
 	HashRecordEntry *item;
-	text	   		*package_name;
-	text	   		*var_name;
-	Package	   		*package;
-	Variable   		*variable;
+	text			*package_name;
+	text			*var_name;
+	Package			*package;
+	Variable		*variable;
 
 	CHECK_ARGS_FOR_NULL();
 
@@ -612,18 +615,21 @@ variable_select(PG_FUNCTION_ARGS)
 
 	if (SRF_IS_FIRSTCALL())
 	{
-		MemoryContext oldcontext;
-		RecordVar  *record;
+		MemoryContext	 oldcontext;
+		RecordVar		*record;
 
 		record = &(GetActualValue(variable).record);
 		funcctx = SRF_FIRSTCALL_INIT();
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		oldcontext = MemoryContextSwitchTo(TopTransactionContext);
 
 		funcctx->tuple_desc = record->tupdesc;
 
 		rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
 		hash_seq_init(rstat, record->rhash);
 		funcctx->user_fctx = rstat;
+
+		rstats = lcons((void *)rstat, rstats);
 
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
@@ -644,6 +650,7 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
+		rstats = list_delete(rstats, rstat);
 		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -2196,6 +2203,18 @@ pgvTransCallback(XactEvent event, void *arg)
 				break;
 		}
 	}
+
+	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_ABORT)
+	{
+		ListCell *cell;
+
+		foreach(cell, rstats)
+		{
+			hash_seq_term((HASH_SEQ_STATUS *) lfirst(cell));
+		}
+
+		rstats = NIL;
+	}
 }
 
 /*
@@ -2208,6 +2227,17 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+
+	{
+		ListCell *cell;
+
+		foreach(cell, rstats)
+		{
+			hash_seq_term((HASH_SEQ_STATUS *) lfirst(cell));
+		}
+
+		rstats = NIL;
+	}
 }
 
 /*
