@@ -3556,3 +3556,100 @@ SELECT pgv_select('test', 'x') LIMIT 1;
 
 ROLLBACK TO SAVEPOINT sp1;
 COMMIT;
+---
+--- Test cases for pgv_stats
+---
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+COMMIT;
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
+ERROR:  there is a record in the variable "y" with same key
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+ROLLBACK;
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+ERROR:  variable "y" already created as TRANSACTIONAL
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+ERROR:  variable "y" already created as TRANSACTIONAL
+SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), FALSE);
+ERROR:  variable "x" already created as TRANSACTIONAL
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+COMMIT;
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+ERROR:  variable "y" already created as TRANSACTIONAL
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,32768)
+(1 row)
+
+ROLLBACK;
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+ERROR:  variable "y" already created as TRANSACTIONAL
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+

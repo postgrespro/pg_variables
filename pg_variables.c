@@ -143,8 +143,10 @@ static MemoryContext changesStackContext = NULL;
  * TopTransactionContext is handy here, becouse it wount be reset by the time
  * pgvTransCallback is called.
  */
-static List *rstats = NIL; 
+static List *variables_stats = NIL; 
+static List *packages_stats = NIL;
 
+static void freeStatsLists(bool deep);
 /* Returns a lists of packages and variables changed at current subxact level */
 #define get_actual_changes_list() \
 	( \
@@ -642,7 +644,7 @@ variable_select(PG_FUNCTION_ARGS)
 		hash_seq_init(rstat, record->rhash);
 		funcctx->user_fctx = rstat;
 
-		rstats = lcons((void *)rstat, rstats);
+		variables_stats = lcons((void *)rstat, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
@@ -663,7 +665,7 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		rstats = list_delete(rstats, rstat);
+		variables_stats = list_delete(variables_stats, rstat);
 		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -1232,13 +1234,14 @@ get_packages_stats(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	MemoryContext oldcontext;
-	HASH_SEQ_STATUS *pstat;
+	HASH_SEQ_STATUS *rstat;
 	Package	   *package;
 
 	if (SRF_IS_FIRSTCALL())
 	{
 		TupleDesc	tupdesc;
 
+		//elog(INFO, " >>> ");
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
@@ -1257,11 +1260,16 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		 */
 		if (packagesHash)
 		{
-			pstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
-			/* Get packages list */
-			hash_seq_init(pstat, packagesHash);
+			MemoryContext ctx;
 
-			funcctx->user_fctx = pstat;
+			ctx = MemoryContextSwitchTo(TopTransactionContext);
+			rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
+			/* Get packages list */
+			hash_seq_init(rstat, packagesHash);
+
+			funcctx->user_fctx = rstat;
+			packages_stats = lcons((void *)rstat, packages_stats);
+			MemoryContextSwitchTo(ctx);
 		}
 		else
 			funcctx->user_fctx = NULL;
@@ -1274,9 +1282,9 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		SRF_RETURN_DONE(funcctx);
 
 	/* Get packages list */
-	pstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
+	rstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
 
-	package = (Package *) hash_seq_search(pstat);
+	package = (Package *) hash_seq_search(rstat);
 	if (package != NULL)
 	{
 		Datum		values[2];
@@ -1308,7 +1316,8 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		pfree(pstat);
+		packages_stats = list_delete(packages_stats, rstat);
+		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -2218,16 +2227,7 @@ pgvTransCallback(XactEvent event, void *arg)
 	}
 
 	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_ABORT)
-	{
-		ListCell *cell;
-
-		foreach(cell, rstats)
-		{
-			hash_seq_term((HASH_SEQ_STATUS *) lfirst(cell));
-		}
-
-		rstats = NIL;
-	}
+		freeStatsLists(true);
 }
 
 /*
@@ -2241,16 +2241,38 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 	else
 		standard_ExecutorEnd(queryDesc);
 
+	freeStatsLists(false);
+}
+
+/*
+ * Free hash_seq_search scans 
+ */
+void
+freeStatsLists(bool deep)
+{
+	ListCell		*cell;
+	HASH_SEQ_STATUS	*status;
+
+	foreach(cell, variables_stats)
 	{
-		ListCell *cell;
+		status = (HASH_SEQ_STATUS *) lfirst(cell);
+		hash_seq_term(status);
 
-		foreach(cell, rstats)
-		{
-			hash_seq_term((HASH_SEQ_STATUS *) lfirst(cell));
-		}
-
-		rstats = NIL;
+		if (deep)
+			pfree(status);
 	}
+
+	variables_stats = NIL;
+
+	foreach(cell, packages_stats)
+	{
+		status = (HASH_SEQ_STATUS *) lfirst(cell);
+		hash_seq_term(status);
+
+		pfree(status);
+	}
+
+	packages_stats = NIL;
 }
 
 /*

@@ -1030,3 +1030,48 @@ SAVEPOINT sp1;
 SELECT pgv_select('test', 'x') LIMIT 1;
 ROLLBACK TO SAVEPOINT sp1;
 COMMIT;
+
+---
+--- Test cases for pgv_stats
+---
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
+SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+ROLLBACK;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+ROLLBACK;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+
+SELECT pgv_free();
