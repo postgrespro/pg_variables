@@ -129,7 +129,20 @@ static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static dlist_head *changesStack = NULL;
 static MemoryContext changesStackContext = NULL;
 
-/* List to store all the running hash_seq_search scan for hash table */
+/*
+ * List to store all the running hash_seq_search scan for hash table.
+ *
+ * NOTE: In function variable_select we use hash_seq_search to find next tuple.
+ * So, in case user do not get all the data from set at once (use cursors or
+ * LIMIT) we have to call hash_seq_term to not to leak hash_seq_search scans.
+ *
+ * For doing this, we alloc all of the rstats in the TopTransactionContext and
+ * save pointers to the rstats into list. Once transaction ended (commited or
+ * aborted) we clear all the "active" hash_seq_search by calling hash_seq_term.
+ *
+ * TopTransactionContext is handy here, becouse it wount be reset by the time
+ * pgvTransCallback is called.
+ */
 static List *rstats = NIL; 
 
 /* Returns a lists of packages and variables changed at current subxact level */

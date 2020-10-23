@@ -3510,3 +3510,49 @@ SELECT pgv_free();
  
 (1 row)
 
+-- take #4
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('test', 'x', ROW (2::int, 3::int), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SAVEPOINT sp1;
+FETCH 1 in r1_cur;
+ pgv_select 
+------------
+ (1,2)
+(1 row)
+
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SAVEPOINT sp1;
+FETCH 2 in r1_cur;
+ pgv_select 
+------------
+ (1,2)
+ (2,3)
+(2 rows)
+
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+BEGIN;
+SAVEPOINT sp1;
+SELECT pgv_select('test', 'x') LIMIT 1;
+ pgv_select 
+------------
+ (1,2)
+(1 row)
+
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;

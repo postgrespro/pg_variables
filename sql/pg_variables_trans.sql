@@ -1007,3 +1007,26 @@ COMMIT;
 SELECT pgv_select('test', 'z3');
 
 SELECT pgv_free();
+-- take #4
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (2::int, 3::int), TRUE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SAVEPOINT sp1;
+FETCH 1 in r1_cur;
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SAVEPOINT sp1;
+FETCH 2 in r1_cur;
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+
+BEGIN;
+SAVEPOINT sp1;
+SELECT pgv_select('test', 'x') LIMIT 1;
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
