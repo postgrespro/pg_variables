@@ -595,28 +595,27 @@ variable_select(PG_FUNCTION_ARGS)
 	FuncCallContext *funcctx;
 	HASH_SEQ_STATUS *rstat;
 	HashRecordEntry *item;
+	text	   		*package_name;
+	text	   		*var_name;
+	Package	   		*package;
+	Variable   		*variable;
+
+	CHECK_ARGS_FOR_NULL();
+
+	/* Get arguments */
+	package_name = PG_GETARG_TEXT_PP(0);
+	var_name = PG_GETARG_TEXT_PP(1);
+
+	package = getPackage(package_name, true);
+	variable = getVariableInternal(package, var_name, RECORDOID, true,
+								   true);
 
 	if (SRF_IS_FIRSTCALL())
 	{
-		text	   *package_name;
-		text	   *var_name;
-		Package	   *package;
-		Variable   *variable;
 		MemoryContext oldcontext;
 		RecordVar  *record;
 
-		CHECK_ARGS_FOR_NULL();
-
-		/* Get arguments */
-		package_name = PG_GETARG_TEXT_PP(0);
-		var_name = PG_GETARG_TEXT_PP(1);
-
-		package = getPackage(package_name, true);
-		variable = getVariableInternal(package, var_name, RECORDOID, true,
-									   true);
-
 		record = &(GetActualValue(variable).record);
-
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 

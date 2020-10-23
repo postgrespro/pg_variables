@@ -614,3 +614,249 @@ SELECT * FROM pgv_list() order by package, name;
 SELECT pgv_select('test', 'z');
 
 SELECT pgv_free();
+
+-- Variables should be rollbackable if transactional
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (2::int, 3::int), TRUE);
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+SELECT pgv_remove('test', 'x');
+ROLLBACK;
+
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+SELECT pgv_remove('test');
+ROLLBACK;
+
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+
+SELECT pgv_select('test', 'x');
+
+---
+--- Variables should not be rollbackable if not transactional
+---
+-- case 1 (remove var)
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), FALSE);
+SELECT pgv_select('test', 'y');
+
+BEGIN;
+SELECT pgv_remove('test', 'y');
+ROLLBACK;
+
+SELECT pgv_select('test', 'y');
+-- case 2 (remove pack)
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), FALSE);
+SELECT pgv_select('test', 'y');
+
+BEGIN;
+SELECT pgv_remove('test');
+ROLLBACK;
+
+SELECT pgv_select('test', 'y');
+-- case 3 (free)
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), FALSE);
+SELECT pgv_select('test', 'y');
+
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+
+SELECT pgv_select('test', 'y');
+-- clear all
+SELECT pgv_free();
+
+---
+--- Cursors test #1 (remove var)
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test', 'y');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+SELECT pgv_free();
+---
+--- Cursors test #2 (remove pack)
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test');
+
+SELECT pgv_free();
+---
+--- Cursors test #3 (free)
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test');
+
+SELECT pgv_free();
+---
+--- Cursor test #4
+---
+
+-- non transactional, remove var
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- non transactional, remove pac
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- non transactional, free
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- transactional, remove var
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test', 'y');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+-- transactional, remove pack
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+-- transactional, free
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+SELECT pgv_free();
+---
+--- Cursor test #5
+---
+
+-- non transactional
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- transactional
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+---
+--- Cursor test #6
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test', 'x');
+COMMIT;
