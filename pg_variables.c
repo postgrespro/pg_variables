@@ -130,7 +130,8 @@ static dlist_head *changesStack = NULL;
 static MemoryContext changesStackContext = NULL;
 
 /*
- * List to store all the running hash_seq_search scan for hash table.
+ * List to store all the running hash_seq_search, variable and package scan for
+ * hash table.
  *
  * NOTE: In function variable_select we use hash_seq_search to find next tuple.
  * So, in case user do not get all the data from set at once (use cursors or
@@ -143,10 +144,116 @@ static MemoryContext changesStackContext = NULL;
  * TopTransactionContext is handy here, becouse it wount be reset by the time
  * pgvTransCallback is called.
  */
-static List *variables_stats = NIL; 
+static List *variables_stats = NIL;
 static List *packages_stats = NIL;
 
-static void freeStatsLists(bool deep);
+typedef struct tagHtabToStat {
+	HTAB			*hash;
+	HASH_SEQ_STATUS	*status;
+	Variable		*variable;
+	Package			*package;
+} HtabToStat;
+
+/*
+ * A bunch of comp functions for HtabToStat members here.
+ */
+static bool
+HtabToStat_status_eq(HtabToStat *entry, void *value)
+{
+	return entry->status == (HASH_SEQ_STATUS *) value;
+}
+
+static bool
+HtabToStat_variable_eq(HtabToStat *entry, void *value)
+{
+	return entry->variable == (Variable *) value;
+}
+
+static bool
+HtabToStat_package_eq(HtabToStat *entry, void *value)
+{
+	return entry->package == (Package *) value;
+}
+
+static bool
+HtabToStat_eq_all(HtabToStat *entry, void *value)
+{
+	return true;
+}
+
+/*
+ * Generic remove_if algorithm for HtabToStat.
+ *
+ *  + eq if function pointer used to compare list entry to the value.
+ *  + if match_first is true return on first match.
+ */
+static void
+HtabToStat_remove_if(List **l, void *value,
+					 bool (*eq)(HtabToStat *, void *),
+					 bool match_first)
+{
+	ListCell	*cell, *next, *prev = NULL;
+	HtabToStat	*entry = NULL;
+
+	for (cell = list_head(*l); cell; cell = next)
+	{
+		entry = (HtabToStat *) lfirst(cell);
+		next = lnext(cell);
+
+		if (eq(entry, value))
+		{
+			*l = list_delete_cell(*l, cell, prev);
+			pfree(entry->status);
+			pfree(entry);
+
+			if (match_first)
+				return;
+		}
+		else
+		{
+			prev = cell;
+		}
+	}
+}
+
+/*
+ * Remove first entry for status.
+ */
+static void
+remove_variables_status(List **l, HASH_SEQ_STATUS *status)
+{
+	HtabToStat_remove_if(l, status, HtabToStat_status_eq, true);
+}
+
+/*
+ * Remove first entry for variable.
+ */
+static void
+remove_variables_variable(List **l, Variable *variable)
+{
+	HtabToStat_remove_if(l, variable, HtabToStat_variable_eq, true);
+}
+
+/*
+ * Remove all the entrys for package.
+ */
+static void
+remove_variables_package(List **l, Package *package)
+{
+	HtabToStat_remove_if(l, package, HtabToStat_package_eq, false);
+}
+
+/*
+ * Remove all.
+ */
+static void
+remove_variables_all(List **l)
+{
+	HtabToStat_remove_if(l, NULL, HtabToStat_eq_all, false);
+	*l = NIL;
+}
+
+static void freeStatsLists(void);
 /* Returns a lists of packages and variables changed at current subxact level */
 #define get_actual_changes_list() \
 	( \
@@ -632,6 +739,7 @@ variable_select(PG_FUNCTION_ARGS)
 	{
 		MemoryContext	 oldcontext;
 		RecordVar		*record;
+		HtabToStat		*htab_to_stat;
 
 		record = &(GetActualValue(variable).record);
 		funcctx = SRF_FIRSTCALL_INIT();
@@ -644,7 +752,12 @@ variable_select(PG_FUNCTION_ARGS)
 		hash_seq_init(rstat, record->rhash);
 		funcctx->user_fctx = rstat;
 
-		variables_stats = lcons((void *)rstat, variables_stats);
+		htab_to_stat = palloc0(sizeof(HtabToStat));
+		htab_to_stat->hash = record->rhash;
+		htab_to_stat->status = rstat;
+		htab_to_stat->variable = variable;
+		htab_to_stat->package = package;
+		variables_stats = lcons((void *)htab_to_stat, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
@@ -665,8 +778,7 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		variables_stats = list_delete(variables_stats, rstat);
-		pfree(rstat);
+		remove_variables_status(&variables_stats, rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -968,6 +1080,8 @@ remove_package(PG_FUNCTION_ARGS)
 
 	resetVariablesCache();
 
+	remove_variables_package(&variables_stats, package);
+
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
 }
@@ -1063,6 +1177,7 @@ remove_packages(PG_FUNCTION_ARGS)
 	}
 
 	resetVariablesCache();
+	remove_variables_all(&variables_stats);
 
 	PG_RETURN_VOID();
 }
@@ -1317,7 +1432,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	else
 	{
 		packages_stats = list_delete(packages_stats, rstat);
-		pfree(rstat);
+		// pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -1777,6 +1892,7 @@ removeObject(TransObject *object, TransObjectType type)
 
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
+	remove_variables_variable(&variables_stats, (Variable *) object);
 
 	/* Remove package if it became empty */
 	if (type == TRANS_VARIABLE && isPackageEmpty(package))
@@ -2227,7 +2343,7 @@ pgvTransCallback(XactEvent event, void *arg)
 	}
 
 	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_ABORT)
-		freeStatsLists(true);
+		freeStatsLists();
 }
 
 /*
@@ -2241,25 +2357,23 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 	else
 		standard_ExecutorEnd(queryDesc);
 
-	freeStatsLists(false);
+	freeStatsLists();
 }
 
 /*
  * Free hash_seq_search scans 
  */
-void
-freeStatsLists(bool deep)
+static void
+freeStatsLists(void)
 {
 	ListCell		*cell;
 	HASH_SEQ_STATUS	*status;
+	HtabToStat		*htab_to_stat;
 
 	foreach(cell, variables_stats)
 	{
-		status = (HASH_SEQ_STATUS *) lfirst(cell);
-		hash_seq_term(status);
-
-		if (deep)
-			pfree(status);
+		htab_to_stat = (HtabToStat *) lfirst(cell);
+		hash_seq_term(htab_to_stat->status);
 	}
 
 	variables_stats = NIL;
@@ -2268,8 +2382,6 @@ freeStatsLists(bool deep)
 	{
 		status = (HASH_SEQ_STATUS *) lfirst(cell);
 		hash_seq_term(status);
-
-		pfree(status);
 	}
 
 	packages_stats = NIL;
