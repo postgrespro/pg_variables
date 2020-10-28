@@ -152,6 +152,7 @@ typedef struct tagHtabToStat {
 	HASH_SEQ_STATUS	*status;
 	Variable		*variable;
 	Package			*package;
+	int				level;
 } HtabToStat;
 
 /*
@@ -181,6 +182,12 @@ HtabToStat_eq_all(HtabToStat *entry, void *value)
 	return true;
 }
 
+static bool
+HtabToStat_level_eq(HtabToStat *entry, void *value)
+{
+	return entry->level == *(int *) value;
+}
+
 /*
  * Generic remove_if algorithm for HtabToStat.
  *
@@ -192,6 +199,7 @@ HtabToStat_remove_if(List **l, void *value,
 					 bool (*eq)(HtabToStat *, void *),
 					 bool match_first)
 {
+#if (PG_VERSION_NUM < 130000)
 	ListCell	*cell, *next, *prev = NULL;
 	HtabToStat	*entry = NULL;
 
@@ -214,6 +222,23 @@ HtabToStat_remove_if(List **l, void *value,
 			prev = cell;
 		}
 	}
+#else
+	/*
+	 * See https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=1cff1b95ab6ddae32faa3efe0d95a820dbfdc164
+	 *
+	 * Version > 13 have different lists interface.
+	 */
+	ListCell	*cell;
+	HtabToStat	*entry = NULL;
+
+	foreach(cell, *l)
+	{
+		entry = (HtabToStat *) lfirst(cell);
+
+		if (eq(entry, value))
+			*l = foreach_delete_current(*l, cell);
+	}
+#endif
 }
 
 /*
@@ -241,6 +266,15 @@ static void
 remove_variables_package(List **l, Package *package)
 {
 	HtabToStat_remove_if(l, package, HtabToStat_package_eq, false);
+}
+
+/*
+ * Remove all the entrys for level.
+ */
+static void
+remove_variables_level(List **l, int level)
+{
+	HtabToStat_remove_if(l, &level, HtabToStat_level_eq, false);
 }
 
 /*
@@ -757,6 +791,7 @@ variable_select(PG_FUNCTION_ARGS)
 		htab_to_stat->status = rstat;
 		htab_to_stat->variable = variable;
 		htab_to_stat->package = package;
+		htab_to_stat->level = GetCurrentTransactionNestLevel();
 		variables_stats = lcons((void *)htab_to_stat, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
@@ -1356,7 +1391,6 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	{
 		TupleDesc	tupdesc;
 
-		//elog(INFO, " >>> ");
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
@@ -1432,7 +1466,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	else
 	{
 		packages_stats = list_delete(packages_stats, rstat);
-		// pfree(rstat);
+		pfree(rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -2312,6 +2346,8 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				break;
 		}
 	}
+
+	remove_variables_level(&variables_stats, GetCurrentTransactionNestLevel());
 }
 
 /*
