@@ -141,8 +141,8 @@ static MemoryContext changesStackContext = NULL;
  * save pointers to the rstats into list. Once transaction ended (commited or
  * aborted) we clear all the "active" hash_seq_search by calling hash_seq_term.
  *
- * TopTransactionContext is handy here, becouse it wount be reset by the time
- * pgvTransCallback is called.
+ * TopTransactionContext is handy here, because it would not be reset by the
+ * time pgvTransCallback is called.
  */
 static List *variables_stats = NIL;
 static List *packages_stats = NIL;
@@ -191,8 +191,8 @@ HtabToStat_level_eq(HtabToStat *entry, void *value)
 /*
  * Generic remove_if algorithm for HtabToStat.
  *
- *  + eq if function pointer used to compare list entry to the value.
- *  + if match_first is true return on first match.
+ * 'eq' - is a function pointer used to compare list entries to the 'value'.
+ * 'match_first' - if true return on first match.
  */
 static void
 HtabToStat_remove_if(List **l, void *value,
@@ -260,7 +260,7 @@ remove_variables_variable(List **l, Variable *variable)
 }
 
 /*
- * Remove all the entrys for package.
+ * Remove all the entries for package.
  */
 static void
 remove_variables_package(List **l, Package *package)
@@ -269,7 +269,7 @@ remove_variables_package(List **l, Package *package)
 }
 
 /*
- * Remove all the entrys for level.
+ * Remove all the entries for level.
  */
 static void
 remove_variables_level(List **l, int level)
