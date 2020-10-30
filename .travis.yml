@@ -1,5 +1,3 @@
-sudo: required
-
 language: c
 
 services:
@@ -18,13 +16,22 @@ notifications:
         on_failure: always
 
 env:
-    - PG_VERSION=11 LEVEL=nightmare
+    - PG_VERSION=13 LEVEL=nightmare
+    - PG_VERSION=13 LEVEL=hardcore
+    - PG_VERSION=13
+    # - PG_VERSION=12 LEVEL=nightmare
+    - PG_VERSION=12 LEVEL=hardcore
+    - PG_VERSION=12
+    # - PG_VERSION=11 LEVEL=nightmare
     - PG_VERSION=11 LEVEL=hardcore
     - PG_VERSION=11
     - PG_VERSION=10
     - PG_VERSION=9.6
     - PG_VERSION=9.5
 
+# XXX: consider fixing nightmare mode
 matrix:
     allow_failures:
         - env: PG_VERSION=11 LEVEL=nightmare
+        - env: PG_VERSION=12 LEVEL=nightmare
+        - env: PG_VERSION=13 LEVEL=nightmare
