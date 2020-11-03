@@ -3668,14 +3668,14 @@ SELECT pgv_insert('test', 'x1', ROW (2::float, 1::float), TRUE);
 DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
 DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
@@ -3692,14 +3692,14 @@ SAVEPOINT comm2;
 DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
 DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
@@ -3716,14 +3716,14 @@ DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
 DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 SAVEPOINT comm2;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
@@ -3739,15 +3739,15 @@ SELECT pgv_insert('test', 'x4', ROW (2::float, 1::float), TRUE);
 DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
 DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
 SAVEPOINT comm2;
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
@@ -3763,14 +3763,14 @@ SELECT pgv_insert('test', 'x5', ROW (2::float, 1::float), TRUE);
 DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
 DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
+ pgv_stats 
+-----------
  (test,0)
 (1 row)
 
