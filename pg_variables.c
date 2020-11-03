@@ -226,7 +226,7 @@ HtabToStat_remove_if(List **l, void *value,
 	/*
 	 * See https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=1cff1b95ab6ddae32faa3efe0d95a820dbfdc164
 	 *
-	 * Version > 13 have different lists interface.
+	 * Version >= 13 have different lists interface.
 	 */
 	ListCell	*cell;
 	HtabToStat	*entry = NULL;
@@ -236,7 +236,14 @@ HtabToStat_remove_if(List **l, void *value,
 		entry = (HtabToStat *) lfirst(cell);
 
 		if (eq(entry, value))
+		{
 			*l = foreach_delete_current(*l, cell);
+			pfree(entry->status);
+			pfree(entry);
+
+			if (match_first)
+				return;
+		}
 	}
 #endif
 }
