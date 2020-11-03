@@ -147,16 +147,23 @@ static MemoryContext changesStackContext = NULL;
 static List *variables_stats = NIL;
 static List *packages_stats = NIL;
 
-typedef struct tagHtabToStat {
+typedef struct tagHtabToStat
+{
 	HTAB			*hash;
 	HASH_SEQ_STATUS	*status;
 	Variable		*variable;
 	Package			*package;
-	int				level;
+	int				 level;
 } HtabToStat;
 
+typedef struct tagPackageStatEntry
+{
+	HASH_SEQ_STATUS	*status;
+	int				 level;
+} PackageStatEntry;
+
 /*
- * A bunch of comp functions for HtabToStat members here.
+ * A bunch of comp functions for HtabToStat and PackageStatEntry  members here.
  */
 static bool
 HtabToStat_status_eq(HtabToStat *entry, void *value)
@@ -184,6 +191,18 @@ HtabToStat_eq_all(HtabToStat *entry, void *value)
 
 static bool
 HtabToStat_level_eq(HtabToStat *entry, void *value)
+{
+	return entry->level == *(int *) value;
+}
+
+static bool
+PackageStatEntry_status_eq(PackageStatEntry *entry, void *value)
+{
+	return entry->status == (HASH_SEQ_STATUS *) value;
+}
+
+static bool
+PackageStatEntry_level_eq(PackageStatEntry *entry, void *value)
 {
 	return entry->level == *(int *) value;
 }
@@ -249,6 +268,75 @@ HtabToStat_remove_if(List **l, void *value,
 }
 
 /*
+ * Generic remove_if algorithm for PackageStatEntry.
+ *
+ * 'eq' - is a function pointer used to compare list entries to the 'value'.
+ * 'match_first' - if true return on first match.
+ */
+static void
+PackageStatEntry_remove_if(List **l, void *value,
+						   bool (*eq)(PackageStatEntry *, void *),
+						   bool match_first,
+						   bool term)
+{
+#if (PG_VERSION_NUM < 130000)
+	ListCell			*cell, *next, *prev = NULL;
+	PackageStatEntry	*entry = NULL;
+
+	for (cell = list_head(*l); cell; cell = next)
+	{
+		entry = (PackageStatEntry *) lfirst(cell);
+		next = lnext(cell);
+
+		if (eq(entry, value))
+		{
+			*l = list_delete_cell(*l, cell, prev);
+
+			if (term)
+				hash_seq_term(entry->status);
+
+			pfree(entry->status);
+			pfree(entry);
+
+			if (match_first)
+				return;
+		}
+		else
+		{
+			prev = cell;
+		}
+	}
+#else
+	/*
+	 * See https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=1cff1b95ab6ddae32faa3efe0d95a820dbfdc164
+	 *
+	 * Version >= 13 have different lists interface.
+	 */
+	ListCell			*cell;
+	PackageStatEntry	*entry = NULL;
+
+	foreach(cell, *l)
+	{
+		entry = (PackageStatEntry *) lfirst(cell);
+
+		if (eq(entry, value))
+		{
+			*l = foreach_delete_current(*l, cell);
+
+			if (term)
+				hash_seq_term(entry->status);
+
+			pfree(entry->status);
+			pfree(entry);
+
+			if (match_first)
+				return;
+		}
+	}
+#endif
+}
+
+/*
  * Remove first entry for status.
  */
 static void
@@ -292,6 +380,26 @@ remove_variables_all(List **l)
 {
 	HtabToStat_remove_if(l, NULL, HtabToStat_eq_all, false);
 	*l = NIL;
+}
+
+/*
+ * Remove first entry for status for packages.
+ */
+static void
+remove_packages_status(List **l, HASH_SEQ_STATUS *status)
+{
+	/* Match first, not term */
+	PackageStatEntry_remove_if(l, status, PackageStatEntry_status_eq, true, false);
+}
+
+/*
+ * Remove first entry for status for packages.
+ */
+static void
+remove_packages_level(List **l, int level)
+{
+	/* Match all, term */
+	PackageStatEntry_remove_if(l, &level, PackageStatEntry_level_eq, false, true);
 }
 
 static void freeStatsLists(void);
@@ -1416,7 +1524,8 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		 */
 		if (packagesHash)
 		{
-			MemoryContext ctx;
+			MemoryContext	 ctx;
+			PackageStatEntry *entry;
 
 			ctx = MemoryContextSwitchTo(TopTransactionContext);
 			rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
@@ -1424,7 +1533,10 @@ get_packages_stats(PG_FUNCTION_ARGS)
 			hash_seq_init(rstat, packagesHash);
 
 			funcctx->user_fctx = rstat;
-			packages_stats = lcons((void *)rstat, packages_stats);
+			entry = palloc0(sizeof(PackageStatEntry));
+			entry->status = rstat;
+			entry->level = GetCurrentTransactionNestLevel();
+			packages_stats = lcons((void *)entry, packages_stats);
 			MemoryContextSwitchTo(ctx);
 		}
 		else
@@ -1472,8 +1584,9 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		packages_stats = list_delete(packages_stats, rstat);
-		pfree(rstat);
+		//packages_stats = list_delete(packages_stats, rstat);
+		//pfree(rstat);
+		remove_packages_status(&packages_stats, rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -2355,6 +2468,50 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 	}
 
 	remove_variables_level(&variables_stats, GetCurrentTransactionNestLevel());
+	remove_packages_level(&packages_stats, GetCurrentTransactionNestLevel());
+
+/*#if (PG_VERSION_NUM < 130000)
+	{
+		ListCell			*cell, *next, *prev = NULL;
+		PackageStatEntry	*entry = NULL;
+
+		for (cell = list_head(packages_stats); cell; cell = next)
+		{
+			entry = (PackageStatEntry *) lfirst(cell);
+			next = lnext(cell);
+
+			if (entry->level == GetCurrentTransactionNestLevel())
+			{
+				packages_stats = list_delete_cell(packages_stats, cell, prev);
+				hash_seq_term(entry->status);
+				pfree(entry->status);
+				pfree(entry);
+			}
+			else
+			{
+				prev = cell;
+			}
+		}
+	}
+#else
+	{
+		ListCell			*cell;
+		PackageStatEntry	*entry = NULL;
+
+		foreach(cell, packages_stats)
+		{
+			entry = (PackageStatEntry *) lfirst(cell);
+
+			if (entry->level == GetCurrentTransactionNestLevel())
+			{
+				packages_stats = foreach_delete_current(packages_stats, cell);
+				hash_seq_term(entry->status);
+				pfree(entry->status);
+				pfree(entry);
+			}
+		}
+	}
+#endif*/
 }
 
 /*
@@ -2410,8 +2567,8 @@ static void
 freeStatsLists(void)
 {
 	ListCell		*cell;
-	HASH_SEQ_STATUS	*status;
 	HtabToStat		*htab_to_stat;
+	PackageStatEntry *entry;
 
 	foreach(cell, variables_stats)
 	{
@@ -2423,8 +2580,8 @@ freeStatsLists(void)
 
 	foreach(cell, packages_stats)
 	{
-		status = (HASH_SEQ_STATUS *) lfirst(cell);
-		hash_seq_term(status);
+		entry = (PackageStatEntry *) lfirst(cell);
+		hash_seq_term(entry->status);
 	}
 
 	packages_stats = NIL;

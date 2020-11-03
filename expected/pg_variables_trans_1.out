@@ -3653,3 +3653,132 @@ SELECT pgv_free();
  
 (1 row)
 
+---
+--- Some special cases
+---
+-- 1
+BEGIN;
+SAVEPOINT comm2;
+SELECT pgv_insert('test', 'x1', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+COMMIT;
+-- 2
+BEGIN;
+SELECT pgv_insert('test', 'x2', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SAVEPOINT comm2;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+COMMIT;
+-- 3
+BEGIN;
+SELECT pgv_insert('test', 'x3', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+SAVEPOINT comm2;
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+COMMIT;
+-- 4
+BEGIN;
+SELECT pgv_insert('test', 'x4', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+SAVEPOINT comm2;
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+COMMIT;
+-- 5
+BEGIN;
+SELECT pgv_insert('test', 'x5', ROW (2::float, 1::float), TRUE);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+FETCH 1 in r2_cur;
+  pgv_stats   
+--------------
+ (test,0)
+(1 row)
+
+SAVEPOINT comm2;
+COMMIT;
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
