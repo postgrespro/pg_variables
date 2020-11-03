@@ -1075,3 +1075,58 @@ ROLLBACK;
 SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
 
 SELECT pgv_free();
+
+---
+--- Some special cases
+---
+-- 1
+BEGIN;
+SAVEPOINT comm2;
+SELECT pgv_insert('test', 'x1', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 2
+BEGIN;
+SELECT pgv_insert('test', 'x2', ROW (2::float, 1::float), TRUE);
+SAVEPOINT comm2;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 3
+BEGIN;
+SELECT pgv_insert('test', 'x3', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+SAVEPOINT comm2;
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 4
+BEGIN;
+SELECT pgv_insert('test', 'x4', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+SAVEPOINT comm2;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 5
+BEGIN;
+SELECT pgv_insert('test', 'x5', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+SAVEPOINT comm2;
+COMMIT;
+
+SELECT pgv_free();
