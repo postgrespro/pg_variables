@@ -2850,14 +2850,13 @@ FETCH 1 in r1_cur;
  (1,2)
 (1 row)
 
+CLOSE r1_cur;
 SELECT pgv_remove('test', 'x');
  pgv_remove 
 ------------
  
 (1 row)
 
-FETCH 1 in r1_cur;
-ERROR:  unrecognized package "test"
 ROLLBACK;
 SELECT pgv_select('test', 'x');
 ERROR:  unrecognized package "test"
@@ -2875,14 +2874,13 @@ FETCH 1 in r1_cur;
  (1,2)
 (1 row)
 
+CLOSE r1_cur;
 SELECT pgv_remove('test');
  pgv_remove 
 ------------
  
 (1 row)
 
-FETCH 1 in r1_cur;
-ERROR:  unrecognized package "test"
 ROLLBACK;
 SELECT pgv_select('test', 'x');
 ERROR:  unrecognized package "test"
@@ -2900,14 +2898,13 @@ FETCH 1 in r1_cur;
  (1,2)
 (1 row)
 
+CLOSE r1_cur;
 SELECT pgv_free();
  pgv_free 
 ----------
  
 (1 row)
 
-FETCH 1 in r1_cur;
-ERROR:  unrecognized package "test"
 ROLLBACK;
 SELECT pgv_select('test', 'x');
 ERROR:  unrecognized package "test"
@@ -3440,6 +3437,7 @@ FETCH 1 in r1_cur;
  (2,2)
 (1 row)
 
+CLOSE r1_cur;
 SELECT pgv_remove('test', 'z2');
  pgv_remove 
 ------------
@@ -3447,7 +3445,7 @@ SELECT pgv_remove('test', 'z2');
 (1 row)
 
 FETCH 1 in r1_cur;
-ERROR:  unrecognized variable "z2"
+ERROR:  cursor "r1_cur" does not exist
 ROLLBACK;
 SELECT pgv_select('test', 'z2');
 ERROR:  unrecognized variable "z2"
@@ -3472,6 +3470,7 @@ FETCH 1 in r1_cur;
  (1,2)
 (1 row)
 
+CLOSE r1_cur;
 SELECT pgv_remove('test', 'z3');
  pgv_remove 
 ------------
@@ -3479,7 +3478,7 @@ SELECT pgv_remove('test', 'z3');
 (1 row)
 
 FETCH 1 in r1_cur;
-ERROR:  unrecognized variable "z3"
+ERROR:  cursor "r1_cur" does not exist
 ROLLBACK;
 SELECT pgv_select('test', 'z3');
  pgv_select 
