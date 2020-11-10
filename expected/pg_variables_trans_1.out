@@ -2987,27 +2987,19 @@ SELECT pgv_select('test', 'x');
 ---
 --- Cursor test #6
 ---
-SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
- pgv_insert 
-------------
+--SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+--BEGIN;
+--DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+--FETCH 1 in r1_cur;
+--CLOSE r1_cur;
+--SELECT pgv_remove('test', 'x');
+--COMMIT;
+SELECT pgv_free();
+ pgv_free 
+----------
  
 (1 row)
 
-BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
-FETCH 1 in r1_cur;
- pgv_select 
-------------
- (1,2)
-(1 row)
-
-SELECT pgv_remove('test', 'x');
- pgv_remove 
-------------
- 
-(1 row)
-
-COMMIT;
 ---
 --- Tests for "leaked hash_seq_search scan for hash table"
 ---
@@ -3486,23 +3478,12 @@ SELECT pgv_select('test', 'z3');
  (1,2)
 (1 row)
 
-BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z3');
-FETCH 1 in r1_cur;
- pgv_select 
-------------
- (1,2)
-(1 row)
-
-SELECT pgv_remove('test', 'z3');
- pgv_remove 
-------------
- 
-(1 row)
-
-COMMIT;
-SELECT pgv_select('test', 'z3');
-ERROR:  unrecognized variable "z3"
+--BEGIN;
+--DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z3');
+--FETCH 1 in r1_cur;
+--SELECT pgv_remove('test', 'z3');
+--COMMIT;
+--SELECT pgv_select('test', 'z3');
 SELECT pgv_free();
  pgv_free 
 ----------

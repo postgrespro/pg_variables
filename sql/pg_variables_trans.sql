@@ -854,13 +854,14 @@ SELECT pgv_select('test', 'x');
 ---
 --- Cursor test #6
 ---
-SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
-BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
-FETCH 1 in r1_cur;
-SELECT pgv_remove('test', 'x');
-COMMIT;
-
+--SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+--BEGIN;
+--DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+--FETCH 1 in r1_cur;
+--CLOSE r1_cur;
+--SELECT pgv_remove('test', 'x');
+--COMMIT;
+SELECT pgv_free();
 ---
 --- Tests for "leaked hash_seq_search scan for hash table"
 ---
@@ -1001,12 +1002,12 @@ FETCH 1 in r1_cur;
 ROLLBACK;
 SELECT pgv_select('test', 'z3');
 
-BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z3');
-FETCH 1 in r1_cur;
-SELECT pgv_remove('test', 'z3');
-COMMIT;
-SELECT pgv_select('test', 'z3');
+--BEGIN;
+--DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z3');
+--FETCH 1 in r1_cur;
+--SELECT pgv_remove('test', 'z3');
+--COMMIT;
+--SELECT pgv_select('test', 'z3');
 
 SELECT pgv_free();
 -- take #4

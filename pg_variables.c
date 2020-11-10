@@ -10,6 +10,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"
+#include "miscadmin.h"
 
 #include "access/htup_details.h"
 #include "access/xact.h"
@@ -1617,8 +1618,6 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		//packages_stats = list_delete(packages_stats, rstat);
-		//pfree(rstat);
 		remove_packages_status(&packages_stats, rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
@@ -2462,15 +2461,43 @@ processChanges(Action action)
 	}
 }
 
+/*
+ * ATX and connection pooling are not compatible with pg_variables.
+ */
 static void
 compatibility_check(void)
 {
 #ifdef PGPRO_EE
-#	if (PG_VERSION_NUM < 130000) || \
-		((PG_VERSION_NUM >= 130000) && (defined PGPRO_FEATURE_ATX))
-		if (getNestLevelATX() != 0)
-				elog(ERROR, "pg_variable extension is not compatible with autonomous transactions and connection pooling");
+
+#	if (PG_VERSION_NUM < 100000)
+		/*
+		 * This versions does not have dedicated macro to check compatibility.
+		 * So, use simple check here.
+		 */
+#		define PG_COMPATIBILITY_CHECK(name) 								   \
+			if (getNestLevelATX() != 0)										   \
+				elog(ERROR, "%s extension is not compatible with autonomous "  \
+							"transactions and connection pooling", name);
+#	else
+		/*
+		 * Since ee12 there is PG_COMPATIBILITY_CHECK macro to check compatibility.
+		 * But for some reasons it may not be present at the moment.
+		 * So, if PG_COMPATIBILITY_CHECK macro is not present pg_variables are
+		 * always compatible.
+		 */
+#		ifndef PG_COMPATIBILITY_CHECK
+#			define PG_COMPATIBILITY_CHECK_LOCK
+#			define PG_COMPATIBILITY_CHECK(name)
+#		endif
+
+		PG_COMPATIBILITY_CHECK("pg_variables");
+
+#		ifdef PG_COMPATIBILITY_CHECK_LOCK
+#			undef PG_COMPATIBILITY_CHECK_LOCK
+#			undef PG_COMPATIBILITY_CHECK
+#		endif
 #	endif
+
 #endif
 }
 
@@ -2486,8 +2513,8 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 		switch (event)
 		{
 			case SUBXACT_EVENT_START_SUB:
-				pushChangesStack();
 				compatibility_check();
+				pushChangesStack();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
 				processChanges(RELEASE_SAVEPOINT);
@@ -2546,8 +2573,6 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
-
-	freeStatsLists();
 }
 
 /*
