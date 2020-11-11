@@ -2573,6 +2573,8 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+
+	freeStatsLists();
 }
 
 /*
