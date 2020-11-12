@@ -2484,21 +2484,12 @@ compatibility_check(void)
 	 */
 #ifdef PGPRO_EE
 
-	/* All the ee have ATX. */
-#	define ATX_CHECK	(getNestLevelATX() != 0)
-	/* ee10 and less does not have connpool. */
-#	if (PG_VERSION_NUM >= 110000)
-#		define CONNPOOL_CHECK		(!IsDedicatedBackend)
-#	else
-#		define CONNPOOL_CHECK		(false)
-#	endif
-
 #	if (PG_VERSION_NUM < 100000)
 		/*
 		 * This versions does not have dedicated macro to check compatibility.
 		 * So, use simple check here for ATX.
 		 */
-		if (ATX_CHECK)
+		if (getNestLevelATX() != 0)
 		{
 			freeStatsLists();
 			elog(ERROR, "pg_variables extension is not compatible with "
@@ -2513,7 +2504,7 @@ compatibility_check(void)
 		 */
 #		ifdef PG_COMPATIBILITY_CHECK
 		{
-			if (ATX_CHECK || CONNPOOL_CHECK)
+			if (!pg_compatibility_check_no_error())
 				freeStatsLists();
 
 			PG_COMPATIBILITY_CHECK("pg_variables");
