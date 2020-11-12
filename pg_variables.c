@@ -16,6 +16,7 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "parser/scansup.h"
+#include "storage/proc.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -2467,38 +2468,63 @@ processChanges(Action action)
 static void
 compatibility_check(void)
 {
+	/*
+	 *  | Edition | ConnPool | ATX | COMPAT_CHECK |
+	 *  -------------------------------------------
+	 *  | std 9.6 | no       | no  | no           |
+	 *  | std 10  | no       | no  | yes          |
+	 *  | std 11  | no       | no  | yes          |
+	 *  | std 12  | no       | no  | yes          |
+	 *  | std 13  | no       | no  | yes          |
+	 *  |  ee 9.6 | no       | yes | no           |
+	 *  |  ee 10  | no       | yes | yes          |
+	 *  |  ee 11  | yes      | yes | yes          |
+	 *  |  ee 12  | yes      | yes | yes          |
+	 *  |  ee 13  | yes      | yes | yes          |
+	 */
 #ifdef PGPRO_EE
+
+	/* All the ee have ATX. */
+#	define ATX_CHECK	(getNestLevelATX() != 0)
+	/* ee10 and less does not have connpool. */
+#	if (PG_VERSION_NUM >= 110000)
+#		define CONNPOOL_CHECK		(!IsDedicatedBackend)
+#	else
+#		define CONNPOOL_CHECK		(false)
+#	endif
 
 #	if (PG_VERSION_NUM < 100000)
 		/*
 		 * This versions does not have dedicated macro to check compatibility.
-		 * So, use simple check here.
+		 * So, use simple check here for ATX.
 		 */
-#		define PG_COMPATIBILITY_CHECK(name) 								   \
-			if (getNestLevelATX() != 0)										   \
-				elog(ERROR, "%s extension is not compatible with autonomous "  \
-							"transactions and connection pooling", name);
+		if (ATX_CHECK)
+		{
+			freeStatsLists();
+			elog(ERROR, "pg_variables extension is not compatible with "
+						"autonomous transactions");
+		}
 #	else
 		/*
-		 * Since ee12 there is PG_COMPATIBILITY_CHECK macro to check compatibility.
+		 * Since ee10 there is PG_COMPATIBILITY_CHECK macro to check compatibility.
 		 * But for some reasons it may not be present at the moment.
 		 * So, if PG_COMPATIBILITY_CHECK macro is not present pg_variables are
 		 * always compatible.
 		 */
-#		ifndef PG_COMPATIBILITY_CHECK
-#			define PG_COMPATIBILITY_CHECK_LOCK
-#			define PG_COMPATIBILITY_CHECK(name)
-#		endif
+#		ifdef PG_COMPATIBILITY_CHECK
+		{
+			if (ATX_CHECK || CONNPOOL_CHECK)
+				freeStatsLists();
 
-		PG_COMPATIBILITY_CHECK("pg_variables");
+			PG_COMPATIBILITY_CHECK("pg_variables");
+		}
+#		endif /* PG_COMPATIBILITY_CHECK */
+#	endif /* PG_VERSION_NUM */
 
-#		ifdef PG_COMPATIBILITY_CHECK_LOCK
-#			undef PG_COMPATIBILITY_CHECK_LOCK
-#			undef PG_COMPATIBILITY_CHECK
-#		endif
-#	endif
+#	undef ATX_CHECK
+#	undef CONNPOOL_CHECK
 
-#endif
+#endif /* PGPRO_EE */
 }
 
 /*
@@ -2513,8 +2539,8 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 		switch (event)
 		{
 			case SUBXACT_EVENT_START_SUB:
-				compatibility_check();
 				pushChangesStack();
+				compatibility_check();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
 				processChanges(RELEASE_SAVEPOINT);
