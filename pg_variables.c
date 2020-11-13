@@ -10,11 +10,13 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"
+#include "miscadmin.h"
 
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "parser/scansup.h"
+#include "storage/proc.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -129,6 +131,313 @@ static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static dlist_head *changesStack = NULL;
 static MemoryContext changesStackContext = NULL;
 
+/*
+ * List to store all the running hash_seq_search, variable and package scan for
+ * hash table.
+ *
+ * NOTE: In function variable_select we use hash_seq_search to find next tuple.
+ * So, in case user do not get all the data from set at once (use cursors or
+ * LIMIT) we have to call hash_seq_term to not to leak hash_seq_search scans.
+ *
+ * For doing this, we alloc all of the rstats in the TopTransactionContext and
+ * save pointers to the rstats into list. Once transaction ended (commited or
+ * aborted) we clear all the "active" hash_seq_search by calling hash_seq_term.
+ *
+ * TopTransactionContext is handy here, because it would not be reset by the
+ * time pgvTransCallback is called.
+ */
+static List *variables_stats = NIL;
+static List *packages_stats = NIL;
+
+typedef struct tagVariableStatEntry
+{
+	HTAB			*hash;
+	HASH_SEQ_STATUS	*status;
+	Variable		*variable;
+	Package			*package;
+	int				 level;
+} VariableStatEntry;
+
+typedef struct tagPackageStatEntry
+{
+	HASH_SEQ_STATUS	*status;
+	int				 level;
+} PackageStatEntry;
+
+/*
+ * Compare functions for VariableStatEntry and PackageStatEntry members.
+ */
+static bool
+VariableStatEntry_status_eq(void *entry, void *value)
+{
+	return ((VariableStatEntry *) entry)->status == (HASH_SEQ_STATUS *) value;
+}
+
+static bool
+VariableStatEntry_variable_eq(void *entry, void *value)
+{
+	return ((VariableStatEntry *) entry)->variable == (Variable *) value;
+}
+
+static bool
+VariableStatEntry_package_eq(void *entry, void *value)
+{
+	return ((VariableStatEntry *) entry)->package == (Package *) value;
+}
+
+static bool
+VariableStatEntry_eq_all(void *entry, void *value)
+{
+	return true;
+}
+
+static bool
+VariableStatEntry_level_eq(void *entry, void *value)
+{
+	return ((VariableStatEntry *) entry)->level == *(int *) value;
+}
+
+static bool
+PackageStatEntry_status_eq(void *entry, void *value)
+{
+	return ((PackageStatEntry *) entry)->status == (HASH_SEQ_STATUS *) value;
+}
+
+static bool
+PackageStatEntry_level_eq(void *entry, void *value)
+{
+	return ((PackageStatEntry *) entry)->level == *(int *) value;
+}
+
+/*
+ * VariableStatEntry and PackageStatEntry status member getters.
+ */
+static HASH_SEQ_STATUS *
+VariableStatEntry_status_ptr(void *entry)
+{
+	return ((VariableStatEntry *) entry)->status;
+}
+
+static HASH_SEQ_STATUS *
+PackageStatEntry_status_ptr(void *entry)
+{
+	return ((PackageStatEntry *) entry)->status;
+}
+
+/*
+ * Generic remove_if algorithm.
+ *
+ * For every item in the list:
+ *  1. Comapare item with value by eq function call.
+ *  2. If eq return true, then step 3, else goto 7.
+ *  3. Delete item from list.
+ *  4. If term is true, call hash_seq_term.
+ *  5. Free memory.
+ *  6. If match_first if true return.
+ *  7. Fetch next item.
+ *
+ */
+typedef struct tagRemoveIfContext
+{
+	List 				**list;					/* target list */
+	void 				*value;					/* value to compare with */
+	bool 				(*eq)(void *, void *);	/* list item eq to value func */
+	HASH_SEQ_STATUS * 	(*getter)(void *);		/* status getter */
+	bool 				match_first;			/* return on first match */
+	bool 				term;					/* hash_seq_term on match */
+} RemoveIfContext;
+
+static void
+list_remove_if(RemoveIfContext ctx)
+{
+#if (PG_VERSION_NUM < 130000)
+	ListCell *cell, *next, *prev = NULL;
+	void	 *entry = NULL;
+
+	for (cell = list_head(*ctx.list); cell; cell = next)
+	{
+		entry = lfirst(cell);
+		next = lnext(cell);
+
+		if (ctx.eq(entry, ctx.value))
+		{
+			*ctx.list = list_delete_cell(*ctx.list, cell, prev);
+
+			if (ctx.term)
+				hash_seq_term(ctx.getter(entry));
+
+			pfree(ctx.getter(entry));
+			pfree(entry);
+
+			if (ctx.match_first)
+				return;
+		}
+		else
+		{
+			prev = cell;
+		}
+	}
+#else
+	/*
+	 * See https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=1cff1b95ab6ddae32faa3efe0d95a820dbfdc164
+	 *
+	 * Version >= 13 have different lists interface.
+	 */
+	ListCell *cell;
+	void	 *entry = NULL;
+
+	foreach(cell, *ctx.list)
+	{
+		entry = lfirst(cell);
+
+		if (ctx.eq(entry, ctx.value))
+		{
+			*ctx.list = foreach_delete_current(*ctx.list, cell);
+
+			if (ctx.term)
+				hash_seq_term(ctx.getter(entry));
+
+			pfree(ctx.getter(entry));
+			pfree(entry);
+
+			if (ctx.match_first)
+				return;
+		}
+	}
+#endif
+}
+
+/*
+ * Remove first entry for status.
+ */
+static void
+remove_variables_status(List **list, HASH_SEQ_STATUS *status)
+{
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = status,
+		.eq			 = VariableStatEntry_status_eq,
+		.getter		 = VariableStatEntry_status_ptr,
+		.match_first = true,
+		.term		 = false
+	};
+	list_remove_if(ctx);
+}
+
+/*
+ * Remove first entry for variable.
+ */
+static void
+remove_variables_variable(List **list, Variable *variable)
+{
+	/*
+	 * It may be more than one item in the list for each variable in case of
+	 * cursor. So match_first is false here.
+	 */
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = variable,
+		.eq			 = VariableStatEntry_variable_eq,
+		.getter		 = VariableStatEntry_status_ptr,
+		.match_first = false,
+		.term		 = true
+	};
+	list_remove_if(ctx);
+}
+
+/*
+ * Remove all the entries for package.
+ */
+static void
+remove_variables_package(List **list, Package *package)
+{
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = package,
+		.eq			 = VariableStatEntry_package_eq,
+		.getter		 = VariableStatEntry_status_ptr,
+		.match_first = false,
+		.term		 = true
+	};
+	list_remove_if(ctx);
+}
+
+/*
+ * Remove all the entries for level.
+ */
+static void
+remove_variables_level(List **list, int level)
+{
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = &level,
+		.eq			 = VariableStatEntry_level_eq,
+		.getter		 = VariableStatEntry_status_ptr,
+		.match_first = false,
+		.term		 = false
+	};
+	list_remove_if(ctx);
+}
+
+/*
+ * Delete variables stats list.
+ */
+static void
+remove_variables_all(List **list)
+{
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = NULL,
+		.eq			 = VariableStatEntry_eq_all,
+		.getter		 = VariableStatEntry_status_ptr,
+		.match_first = false,
+		.term		 = true
+	};
+	list_remove_if(ctx);
+}
+
+/*
+ * Remove first entrie with status for packages list.
+ */
+static void
+remove_packages_status(List **list, HASH_SEQ_STATUS *status)
+{
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = status,
+		.eq			 = PackageStatEntry_status_eq,
+		.getter		 = PackageStatEntry_status_ptr,
+		.match_first = true,
+		.term		 = false
+	};
+	list_remove_if(ctx);
+}
+
+/*
+ * Remove all the entries with level for packages list.
+ */
+static void
+remove_packages_level(List **list, int level)
+{
+	RemoveIfContext ctx =
+	{
+		.list		 = list,
+		.value		 = &level,
+		.eq			 = PackageStatEntry_level_eq,
+		.getter		 = PackageStatEntry_status_ptr,
+		.match_first = false,
+		.term		 = true
+	};
+	list_remove_if(ctx);
+}
+
+static void freeStatsLists(void);
 /* Returns a lists of packages and variables changed at current subxact level */
 #define get_actual_changes_list() \
 	( \
@@ -595,36 +904,45 @@ variable_select(PG_FUNCTION_ARGS)
 	FuncCallContext *funcctx;
 	HASH_SEQ_STATUS *rstat;
 	HashRecordEntry *item;
+	text			*package_name;
+	text			*var_name;
+	Package			*package;
+	Variable		*variable;
+
+	CHECK_ARGS_FOR_NULL();
+
+	/* Get arguments */
+	package_name = PG_GETARG_TEXT_PP(0);
+	var_name = PG_GETARG_TEXT_PP(1);
+
+	package = getPackage(package_name, true);
+	variable = getVariableInternal(package, var_name, RECORDOID, true,
+								   true);
 
 	if (SRF_IS_FIRSTCALL())
 	{
-		text	   *package_name;
-		text	   *var_name;
-		Package	   *package;
-		Variable   *variable;
-		MemoryContext oldcontext;
-		RecordVar  *record;
-
-		CHECK_ARGS_FOR_NULL();
-
-		/* Get arguments */
-		package_name = PG_GETARG_TEXT_PP(0);
-		var_name = PG_GETARG_TEXT_PP(1);
-
-		package = getPackage(package_name, true);
-		variable = getVariableInternal(package, var_name, RECORDOID, true,
-									   true);
+		MemoryContext	 	 oldcontext;
+		RecordVar			*record;
+		VariableStatEntry	*entry;
 
 		record = &(GetActualValue(variable).record);
-
 		funcctx = SRF_FIRSTCALL_INIT();
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		oldcontext = MemoryContextSwitchTo(TopTransactionContext);
 
 		funcctx->tuple_desc = record->tupdesc;
 
 		rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
 		hash_seq_init(rstat, record->rhash);
 		funcctx->user_fctx = rstat;
+
+		entry = palloc0(sizeof(VariableStatEntry));
+		entry->hash = record->rhash;
+		entry->status = rstat;
+		entry->variable = variable;
+		entry->package = package;
+		entry->level = GetCurrentTransactionNestLevel();
+		variables_stats = lcons((void *)entry, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
@@ -645,7 +963,7 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		pfree(rstat);
+		remove_variables_status(&variables_stats, rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -947,6 +1265,8 @@ remove_package(PG_FUNCTION_ARGS)
 
 	resetVariablesCache();
 
+	remove_variables_package(&variables_stats, package);
+
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
 }
@@ -1042,6 +1362,7 @@ remove_packages(PG_FUNCTION_ARGS)
 	}
 
 	resetVariablesCache();
+	remove_variables_all(&variables_stats);
 
 	PG_RETURN_VOID();
 }
@@ -1213,7 +1534,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	MemoryContext oldcontext;
-	HASH_SEQ_STATUS *pstat;
+	HASH_SEQ_STATUS *rstat;
 	Package	   *package;
 
 	if (SRF_IS_FIRSTCALL())
@@ -1238,11 +1559,20 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		 */
 		if (packagesHash)
 		{
-			pstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
-			/* Get packages list */
-			hash_seq_init(pstat, packagesHash);
+			MemoryContext	 ctx;
+			PackageStatEntry *entry;
 
-			funcctx->user_fctx = pstat;
+			ctx = MemoryContextSwitchTo(TopTransactionContext);
+			rstat = (HASH_SEQ_STATUS *) palloc0(sizeof(HASH_SEQ_STATUS));
+			/* Get packages list */
+			hash_seq_init(rstat, packagesHash);
+
+			funcctx->user_fctx = rstat;
+			entry = palloc0(sizeof(PackageStatEntry));
+			entry->status = rstat;
+			entry->level = GetCurrentTransactionNestLevel();
+			packages_stats = lcons((void *)entry, packages_stats);
+			MemoryContextSwitchTo(ctx);
 		}
 		else
 			funcctx->user_fctx = NULL;
@@ -1255,9 +1585,9 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		SRF_RETURN_DONE(funcctx);
 
 	/* Get packages list */
-	pstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
+	rstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
 
-	package = (Package *) hash_seq_search(pstat);
+	package = (Package *) hash_seq_search(rstat);
 	if (package != NULL)
 	{
 		Datum		values[2];
@@ -1289,7 +1619,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		pfree(pstat);
+		remove_packages_status(&packages_stats, rstat);
 		SRF_RETURN_DONE(funcctx);
 	}
 }
@@ -1749,6 +2079,7 @@ removeObject(TransObject *object, TransObjectType type)
 
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
+	remove_variables_variable(&variables_stats, (Variable *) object);
 
 	/* Remove package if it became empty */
 	if (type == TRANS_VARIABLE && isPackageEmpty(package))
@@ -2131,16 +2462,60 @@ processChanges(Action action)
 	}
 }
 
+/*
+ * ATX and connection pooling are not compatible with pg_variables.
+ */
 static void
 compatibility_check(void)
 {
+	/*
+	 *  | Edition | ConnPool | ATX | COMPAT_CHECK |
+	 *  -------------------------------------------
+	 *  | std 9.6 | no       | no  | no           |
+	 *  | std 10  | no       | no  | yes          |
+	 *  | std 11  | no       | no  | yes          |
+	 *  | std 12  | no       | no  | yes          |
+	 *  | std 13  | no       | no  | yes          |
+	 *  |  ee 9.6 | no       | yes | no           |
+	 *  |  ee 10  | no       | yes | yes          |
+	 *  |  ee 11  | yes      | yes | yes          |
+	 *  |  ee 12  | yes      | yes | yes          |
+	 *  |  ee 13  | yes      | yes | yes          |
+	 */
 #ifdef PGPRO_EE
-#	if (PG_VERSION_NUM < 130000) || \
-		((PG_VERSION_NUM >= 130000) && (defined PGPRO_FEATURE_ATX))
+
+#	if (PG_VERSION_NUM < 100000)
+		/*
+		 * This versions does not have dedicated macro to check compatibility.
+		 * So, use simple check here for ATX.
+		 */
 		if (getNestLevelATX() != 0)
-				elog(ERROR, "pg_variable extension is not compatible with autonomous transactions and connection pooling");
-#	endif
-#endif
+		{
+			freeStatsLists();
+			elog(ERROR, "pg_variables extension is not compatible with "
+						"autonomous transactions");
+		}
+#	else
+		/*
+		 * Since ee10 there is PG_COMPATIBILITY_CHECK macro to check compatibility.
+		 * But for some reasons it may not be present at the moment.
+		 * So, if PG_COMPATIBILITY_CHECK macro is not present pg_variables are
+		 * always compatible.
+		 */
+#		ifdef PG_COMPATIBILITY_CHECK
+		{
+			if (!pg_compatibility_check_no_error())
+				freeStatsLists();
+
+			PG_COMPATIBILITY_CHECK("pg_variables");
+		}
+#		endif /* PG_COMPATIBILITY_CHECK */
+#	endif /* PG_VERSION_NUM */
+
+#	undef ATX_CHECK
+#	undef CONNPOOL_CHECK
+
+#endif /* PGPRO_EE */
 }
 
 /*
@@ -2168,6 +2543,9 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				break;
 		}
 	}
+
+	remove_variables_level(&variables_stats, GetCurrentTransactionNestLevel());
+	remove_packages_level(&packages_stats, GetCurrentTransactionNestLevel());
 }
 
 /*
@@ -2197,6 +2575,9 @@ pgvTransCallback(XactEvent event, void *arg)
 				break;
 		}
 	}
+
+	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_ABORT)
+		freeStatsLists();
 }
 
 /*
@@ -2209,6 +2590,33 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+
+	freeStatsLists();
+}
+
+/*
+ * Free hash_seq_search scans 
+ */
+static void
+freeStatsLists(void)
+{
+	ListCell		*cell;
+
+	foreach(cell, variables_stats)
+	{
+		VariableStatEntry *entry = (VariableStatEntry *) lfirst(cell);
+		hash_seq_term(entry->status);
+	}
+
+	variables_stats = NIL;
+
+	foreach(cell, packages_stats)
+	{
+		PackageStatEntry *entry = (PackageStatEntry *) lfirst(cell);
+		hash_seq_term(entry->status);
+	}
+
+	packages_stats = NIL;
 }
 
 /*

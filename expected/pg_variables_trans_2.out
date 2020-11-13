@@ -3650,13 +3650,13 @@ DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
   pgv_stats   
 --------------
- (test,32768)
+ (test,24576)
 (1 row)
 
 FETCH 1 in r2_cur;
   pgv_stats   
 --------------
- (test,32768)
+ (test,24576)
 (1 row)
 
 COMMIT;
@@ -3674,13 +3674,13 @@ DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
   pgv_stats   
 --------------
- (test,49152)
+ (test,40960)
 (1 row)
 
 FETCH 1 in r2_cur;
   pgv_stats   
 --------------
- (test,49152)
+ (test,40960)
 (1 row)
 
 COMMIT;
@@ -3698,13 +3698,13 @@ SAVEPOINT comm2;
 FETCH 1 in r1_cur;
   pgv_stats   
 --------------
- (test,65536)
+ (test,57344)
 (1 row)
 
 FETCH 1 in r2_cur;
   pgv_stats   
 --------------
- (test,65536)
+ (test,57344)
 (1 row)
 
 COMMIT;
@@ -3721,14 +3721,14 @@ DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
   pgv_stats   
 --------------
- (test,81920)
+ (test,73728)
 (1 row)
 
 SAVEPOINT comm2;
 FETCH 1 in r2_cur;
   pgv_stats   
 --------------
- (test,81920)
+ (test,73728)
 (1 row)
 
 COMMIT;
@@ -3745,13 +3745,13 @@ DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
 FETCH 1 in r1_cur;
   pgv_stats   
 --------------
- (test,98304)
+ (test,90112)
 (1 row)
 
 FETCH 1 in r2_cur;
   pgv_stats   
 --------------
- (test,98304)
+ (test,90112)
 (1 row)
 
 SAVEPOINT comm2;
