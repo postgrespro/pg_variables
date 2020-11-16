@@ -614,3 +614,522 @@ SELECT * FROM pgv_list() order by package, name;
 SELECT pgv_select('test', 'z');
 
 SELECT pgv_free();
+
+-- Variables should be rollbackable if transactional
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (2::int, 3::int), TRUE);
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+SELECT pgv_remove('test', 'x');
+ROLLBACK;
+
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+SELECT pgv_remove('test');
+ROLLBACK;
+
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+
+SELECT pgv_select('test', 'x');
+
+---
+--- Variables should not be rollbackable if not transactional
+---
+-- case 1 (remove var)
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), FALSE);
+SELECT pgv_select('test', 'y');
+
+BEGIN;
+SELECT pgv_remove('test', 'y');
+ROLLBACK;
+
+SELECT pgv_select('test', 'y');
+-- case 2 (remove pack)
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), FALSE);
+SELECT pgv_select('test', 'y');
+
+BEGIN;
+SELECT pgv_remove('test');
+ROLLBACK;
+
+SELECT pgv_select('test', 'y');
+-- case 3 (free)
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), FALSE);
+SELECT pgv_select('test', 'y');
+
+BEGIN;
+SELECT pgv_free();
+ROLLBACK;
+
+SELECT pgv_select('test', 'y');
+-- clear all
+SELECT pgv_free();
+
+---
+--- Cursors test #1 (remove var)
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test', 'y');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+SELECT pgv_free();
+---
+--- Cursors test #2 (remove pack)
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test');
+
+SELECT pgv_free();
+---
+--- Cursors test #3 (free)
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test');
+
+SELECT pgv_free();
+---
+--- Cursor test #4
+---
+
+-- non transactional, remove var
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- non transactional, remove pac
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- non transactional, free
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- transactional, remove var
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test', 'y');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+-- transactional, remove pack
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+-- transactional, free
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'y');
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'y');
+
+SELECT pgv_free();
+---
+--- Cursor test #5
+---
+
+-- non transactional
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+SELECT pgv_remove('test', 'x');
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+SELECT pgv_remove('test');
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+SELECT pgv_free();
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+-- transactional
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test', 'x');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+SELECT pgv_free();
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'x');
+
+---
+--- Cursor test #6
+---
+--SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+--BEGIN;
+--DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+--FETCH 1 in r1_cur;
+--CLOSE r1_cur;
+--SELECT pgv_remove('test', 'x');
+--COMMIT;
+SELECT pgv_free();
+---
+--- Tests for "leaked hash_seq_search scan for hash table"
+---
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), FALSE);
+SELECT pgv_insert('test', 'x', ROW (2::int, 3::int), FALSE);
+SELECT pgv_insert('test', 'x', ROW (3::int, 4::int), FALSE);
+SELECT pgv_select('test', 'x') LIMIT 1;
+SELECT pgv_select('test', 'x') LIMIT 2;
+SELECT pgv_select('test', 'x') LIMIT 3;
+BEGIN;
+SELECT pgv_select('test', 'x') LIMIT 1;
+SELECT pgv_select('test', 'x') LIMIT 2;
+SELECT pgv_select('test', 'x') LIMIT 3;
+ROLLBACK;
+BEGIN;
+SELECT pgv_select('test', 'x') LIMIT 1;
+SELECT pgv_select('test', 'x') LIMIT 2;
+SELECT pgv_select('test', 'x') LIMIT 3;
+COMMIT;
+
+SELECT pgv_insert('test', 'y', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'y', ROW (2::int, 3::int), TRUE);
+SELECT pgv_insert('test', 'y', ROW (3::int, 4::int), TRUE);
+SELECT pgv_select('test', 'y') LIMIT 1;
+SELECT pgv_select('test', 'y') LIMIT 2;
+SELECT pgv_select('test', 'y') LIMIT 3;
+BEGIN;
+SELECT pgv_select('test', 'y') LIMIT 1;
+SELECT pgv_select('test', 'y') LIMIT 2;
+SELECT pgv_select('test', 'y') LIMIT 3;
+ROLLBACK;
+BEGIN;
+SELECT pgv_select('test', 'y') LIMIT 1;
+SELECT pgv_select('test', 'y') LIMIT 2;
+SELECT pgv_select('test', 'y') LIMIT 3;
+COMMIT;
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+FETCH 1 in r3_cur;
+ROLLBACK;
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 2 in r1_cur;
+FETCH 2 in r2_cur;
+FETCH 2 in r3_cur;
+ROLLBACK;
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 3 in r1_cur;
+FETCH 3 in r2_cur;
+FETCH 3 in r3_cur;
+ROLLBACK;
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+FETCH 1 in r3_cur;
+COMMIT;
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 2 in r1_cur;
+FETCH 2 in r2_cur;
+FETCH 2 in r3_cur;
+COMMIT;
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 3 in r1_cur;
+FETCH 3 in r2_cur;
+FETCH 3 in r3_cur;
+COMMIT;
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+FETCH 2 in r2_cur;
+FETCH 3 in r3_cur;
+ROLLBACK;
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+DECLARE r2_cur CURSOR FOR SELECT pgv_select('test', 'y');
+DECLARE r3_cur CURSOR FOR SELECT pgv_select('test', 'x');
+FETCH 1 in r1_cur;
+FETCH 2 in r2_cur;
+FETCH 3 in r3_cur;
+COMMIT;
+
+---
+--- Some special cases
+---
+-- take #1
+SELECT pgv_insert('test', 'z1', ROW (2::int, 2::int), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z1');
+FETCH 1 in r1_cur;
+SELECT pgv_remove('test', 'z1');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'z1');
+-- take #2
+SELECT pgv_insert('test', 'z2', ROW (2::int, 2::int), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z2');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+SELECT pgv_remove('test', 'z2');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'z2');
+SELECT pgv_insert('test', 'z2', ROW (1::int, 2::int), FALSE);
+-- take #3
+SELECT pgv_insert('test', 'z3', ROW (1::int, 2::int), TRUE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z3');
+FETCH 1 in r1_cur;
+CLOSE r1_cur;
+SELECT pgv_remove('test', 'z3');
+FETCH 1 in r1_cur;
+ROLLBACK;
+SELECT pgv_select('test', 'z3');
+
+--BEGIN;
+--DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'z3');
+--FETCH 1 in r1_cur;
+--SELECT pgv_remove('test', 'z3');
+--COMMIT;
+--SELECT pgv_select('test', 'z3');
+
+SELECT pgv_free();
+-- take #4
+SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+SELECT pgv_insert('test', 'x', ROW (2::int, 3::int), TRUE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SAVEPOINT sp1;
+FETCH 1 in r1_cur;
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+SAVEPOINT sp1;
+FETCH 2 in r1_cur;
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+
+BEGIN;
+SAVEPOINT sp1;
+SELECT pgv_select('test', 'x') LIMIT 1;
+ROLLBACK TO SAVEPOINT sp1;
+COMMIT;
+
+---
+--- Test cases for pgv_stats
+---
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
+SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), TRUE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+ROLLBACK;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), FALSE);
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+
+BEGIN;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+ROLLBACK;
+
+SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
+
+SELECT pgv_free();
+
+---
+--- Some special cases
+---
+-- 1
+BEGIN;
+SAVEPOINT comm2;
+SELECT pgv_insert('test', 'x1', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 2
+BEGIN;
+SELECT pgv_insert('test', 'x2', ROW (2::float, 1::float), TRUE);
+SAVEPOINT comm2;
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 3
+BEGIN;
+SELECT pgv_insert('test', 'x3', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+SAVEPOINT comm2;
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 4
+BEGIN;
+SELECT pgv_insert('test', 'x4', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+SAVEPOINT comm2;
+FETCH 1 in r2_cur;
+COMMIT;
+
+-- 5
+BEGIN;
+SELECT pgv_insert('test', 'x5', ROW (2::float, 1::float), TRUE);
+DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+FETCH 1 in r1_cur;
+FETCH 1 in r2_cur;
+SAVEPOINT comm2;
+COMMIT;
+
+SELECT pgv_free();
