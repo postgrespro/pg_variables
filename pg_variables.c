@@ -696,13 +696,15 @@ variable_insert(PG_FUNCTION_ARGS)
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
 
 	record = &(GetActualValue(variable).record);
-	if (!record->tupdesc)
+	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
+
+	if (!record->tupdesc || variable->is_deleted)
 	{
 		/*
 		 * This is the first record for the var_name. Initialize record.
 		 */
-		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
 		init_record(record, tupdesc, variable);
+		variable->is_deleted = false;
 	}
 	else if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
 		LastTypeId != tupType)
@@ -711,16 +713,7 @@ variable_insert(PG_FUNCTION_ARGS)
 		 * We need to check attributes of the new row if this is a transient
 		 * record type or if last record has different id.
 		 */
-		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
-		if (variable->is_deleted)
-		{
-			init_record(record, tupdesc, variable);
-			variable->is_deleted = false;
-		}
-		else
-		{
-			check_attributes(variable, tupdesc);
-		}
+		check_attributes(variable, tupdesc);
 	}
 
 	LastTypeId = tupType;
