@@ -563,11 +563,11 @@ ERROR:  variable "j1" requires "jsonb" value
 SELECT pgv_insert('vars3', 'r1', tab) FROM tab;
 ERROR:  there is a record in the variable "r1" with same key
 SELECT pgv_insert('vars3', 'r1', row(1, 'str1', 'str2'));
-ERROR:  new record structure differs from variable "r1" structure
+ERROR:  new record structure have 3 attributes, but variable "r1" structure have 2.
 SELECT pgv_insert('vars3', 'r1', row(1, 1));
-ERROR:  new record structure differs from variable "r1" structure
+ERROR:  new record attribute type for attribute number 2 differs from variable "r1" structure. You may need explicit type casts.
 SELECT pgv_insert('vars3', 'r1', row('str1', 'str1'));
-ERROR:  new record structure differs from variable "r1" structure
+ERROR:  new record attribute type for attribute number 1 differs from variable "r1" structure. You may need explicit type casts.
 SELECT pgv_select('vars3', 'r1', ARRAY[[1,2]]); -- fail
 ERROR:  searching for elements in multidimensional arrays is not supported
 -- Test variables caching
