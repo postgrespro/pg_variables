@@ -929,3 +929,59 @@ SELECT * FROM pgv_list() order by package, name;
 ---------+------+------------------
 (0 rows)
 
+-- Check insert of record with various amount of fields
+CREATE TEMP TABLE foo(id int, t text);
+INSERT INTO foo VALUES (0, 'str00');
+SELECT pgv_insert('vars', 'r1', row(1, 'str1'::text, 'str2'::text));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_select('vars', 'r1');
+  pgv_select   
+---------------
+ (1,str1,str2)
+(1 row)
+
+SELECT pgv_insert('vars', 'r1', foo) FROM foo;
+ERROR:  new record structure have 2 attributes, but variable "r1" structure have 3.
+SELECT pgv_select('vars', 'r1');
+  pgv_select   
+---------------
+ (1,str1,str2)
+(1 row)
+
+SELECT pgv_insert('vars', 'r2', row(1, 'str1'));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'r2', foo) FROM foo;
+ERROR:  new record attribute type for attribute number 2 differs from variable "r2" structure. You may need explicit type casts.
+SELECT pgv_select('vars', 'r2');
+ pgv_select 
+------------
+ (1,str1)
+(1 row)
+
+SELECT pgv_insert('vars', 'r3', row(1, 'str1'::text));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'r3', foo) FROM foo;
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_select('vars', 'r3');
+ pgv_select 
+------------
+ (1,str1)
+ (0,str00)
+(2 rows)
+

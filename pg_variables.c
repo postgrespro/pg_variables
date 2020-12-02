@@ -121,8 +121,6 @@ static MemoryContext ModuleContext = NULL;
 static Package *LastPackage = NULL;
 /* Recent variable */
 static Variable *LastVariable = NULL;
-/* Recent row type id */
-static Oid LastTypeId = InvalidOid;
 
 /* Saved hook values for recall */
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
@@ -706,8 +704,7 @@ variable_insert(PG_FUNCTION_ARGS)
 		init_record(record, tupdesc, variable);
 		variable->is_deleted = false;
 	}
-	else if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
-		LastTypeId != tupType)
+	else
 	{
 		/*
 		 * We need to check attributes of the new row if this is a transient
@@ -715,8 +712,6 @@ variable_insert(PG_FUNCTION_ARGS)
 		 */
 		check_attributes(variable, tupdesc);
 	}
-
-	LastTypeId = tupType;
 
 	insert_record(variable, rec);
 
@@ -742,6 +737,7 @@ variable_update(PG_FUNCTION_ARGS)
 	bool		res;
 	Oid			tupType;
 	int32		tupTypmod;
+	TupleDesc	tupdesc = NULL;
 
 	/* Checks */
 	CHECK_ARGS_FOR_NULL();
@@ -794,17 +790,9 @@ variable_update(PG_FUNCTION_ARGS)
 	tupType = HeapTupleHeaderGetTypeId(rec);
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
 
-	if (LastTypeId == RECORDOID || !OidIsValid(LastTypeId) ||
-		LastTypeId != tupType)
-	{
-		TupleDesc	tupdesc = NULL;
-
-		tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
-		check_attributes(variable, tupdesc);
-		ReleaseTupleDesc(tupdesc);
-	}
-
-	LastTypeId = tupType;
+	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
+	check_attributes(variable, tupdesc);
+	ReleaseTupleDesc(tupdesc);
 
 	res = update_record(variable, rec);
 
@@ -1330,7 +1318,6 @@ resetVariablesCache(void)
 	/* Remove package and variable from cache */
 	LastPackage = NULL;
 	LastVariable = NULL;
-	LastTypeId = InvalidOid;
 }
 
 /*
