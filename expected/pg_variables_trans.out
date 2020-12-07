@@ -3539,6 +3539,16 @@ COMMIT;
 ---
 --- Test cases for pgv_stats
 ---
+--- Amount of allocated memory may vary from version to version, as well as from
+--- platform to platform. Moreover, postgres versions less than 90600 always
+--- show zero allocated memory. So, it's much easier to check if allocated
+--- memory size is multiple of 8k since we use ALLOCSET_DEFAULT_INITSIZE
+--- (see memutils.h), insted of creating multiple outputs files.
+---
+CREATE TEMP VIEW pgv_stats_view(pack, mem_mult) AS
+    SELECT package, allocated_memory % 8192 as allocated_multiple_8192
+      FROM pgv_stats()
+     ORDER BY 1;
 SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
  pgv_insert 
 ------------
@@ -3552,36 +3562,36 @@ SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), TRUE);
 (1 row)
 
 BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 COMMIT;
 SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), TRUE);
 ERROR:  there is a record in the variable "y" with same key
 BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 ROLLBACK;
@@ -3592,36 +3602,36 @@ ERROR:  variable "y" already created as TRANSACTIONAL
 SELECT pgv_insert('test1', 'x', ROW (2::float, 1::float), FALSE);
 ERROR:  variable "x" already created as TRANSACTIONAL
 BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 COMMIT;
 SELECT pgv_insert('test1', 'y', ROW (2::float, 1::float), FALSE);
 ERROR:  variable "y" already created as TRANSACTIONAL
 BEGIN;
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 ROLLBACK;
@@ -3645,18 +3655,18 @@ SELECT pgv_insert('test', 'x1', ROW (2::float, 1::float), TRUE);
  
 (1 row)
 
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,32768)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 COMMIT;
@@ -3669,18 +3679,18 @@ SELECT pgv_insert('test', 'x2', ROW (2::float, 1::float), TRUE);
 (1 row)
 
 SAVEPOINT comm2;
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,49152)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,49152)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 COMMIT;
@@ -3692,19 +3702,19 @@ SELECT pgv_insert('test', 'x3', ROW (2::float, 1::float), TRUE);
  
 (1 row)
 
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 SAVEPOINT comm2;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,65536)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,65536)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 COMMIT;
@@ -3716,19 +3726,19 @@ SELECT pgv_insert('test', 'x4', ROW (2::float, 1::float), TRUE);
  
 (1 row)
 
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,81920)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 SAVEPOINT comm2;
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,81920)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 COMMIT;
@@ -3740,22 +3750,23 @@ SELECT pgv_insert('test', 'x5', ROW (2::float, 1::float), TRUE);
  
 (1 row)
 
-DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
-DECLARE r2_cur CURSOR FOR SELECT pgv_stats();
+DECLARE r1_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
+DECLARE r2_cur CURSOR FOR SELECT pack, mem_mult FROM pgv_stats_view;
 FETCH 1 in r1_cur;
-  pgv_stats   
---------------
- (test,98304)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 FETCH 1 in r2_cur;
-  pgv_stats   
---------------
- (test,98304)
+ pack | mem_mult 
+------+----------
+ test |        0
 (1 row)
 
 SAVEPOINT comm2;
 COMMIT;
+DROP VIEW pgv_stats_view;
 SELECT pgv_free();
  pgv_free 
 ----------
