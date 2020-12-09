@@ -188,8 +188,9 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 	if (record->tupdesc->natts != tupdesc->natts)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("new record structure differs from variable \"%s\" "
-						"structure", GetName(variable))));
+				 errmsg("new record structure have %d attributes, but variable "
+						"\"%s\" structure have %d.",
+						tupdesc->natts, GetName(variable), record->tupdesc->natts)));
 
 	/* Second, check columns type. */
 	for (i = 0; i < tupdesc->natts; i++)
@@ -202,8 +203,10 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 			|| (attr1->atttypmod != attr2->atttypmod))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("new record structure differs from variable \"%s\" "
-							"structure", GetName(variable))));
+					 errmsg("new record attribute type for attribute number %d "
+							"differs from variable \"%s\" structure.",
+							i + 1, GetName(variable)),
+					 errhint("You may need explicit type casts.")));
 	}
 }
 

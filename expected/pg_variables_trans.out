@@ -3773,3 +3773,59 @@ SELECT pgv_free();
  
 (1 row)
 
+---
+--- Test case for issue #32 [PGPRO-4456]
+---
+CREATE TEMP TABLE tab (id int, t varchar);
+INSERT INTO tab VALUES (0, 'str00');
+SELECT pgv_insert('vars', 'r1', row(1, 'str1', 'str2'));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'a', tab) FROM tab;
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'r1', tab) FROM tab;
+ERROR:  new record structure have 2 attributes, but variable "r1" structure have 3.
+SELECT pgv_select('vars', 'r1');
+  pgv_select   
+---------------
+ (1,str1,str2)
+(1 row)
+
+SELECT pgv_insert('vars', 'r2', row(1, 'str1'::varchar));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'b', tab) FROM tab;
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'r2', tab) FROM tab;
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_select('vars', 'r2');
+ pgv_select 
+------------
+ (1,str1)
+ (0,str00)
+(2 rows)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
