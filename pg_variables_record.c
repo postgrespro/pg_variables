@@ -204,9 +204,9 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("new record attribute type for attribute number %d "
-							"differs from variable \"%s\" structure. You may "
-							"need explicit type casts.",
-							i + 1, GetName(variable))));
+							"differs from variable \"%s\" structure.",
+							i + 1, GetName(variable)),
+					 errhint("You may need explicit type casts.")));
 	}
 }
 
