@@ -259,3 +259,19 @@ SELECT pgv_free();
 SELECT pgv_exists('vars');
 
 SELECT * FROM pgv_list() order by package, name;
+-- Check insert of record with various amount of fields
+CREATE TEMP TABLE foo(id int, t text);
+INSERT INTO foo VALUES (0, 'str00');
+
+SELECT pgv_insert('vars', 'r1', row(1, 'str1'::text, 'str2'::text));
+SELECT pgv_select('vars', 'r1');
+SELECT pgv_insert('vars', 'r1', foo) FROM foo;
+SELECT pgv_select('vars', 'r1');
+
+SELECT pgv_insert('vars', 'r2', row(1, 'str1'));
+SELECT pgv_insert('vars', 'r2', foo) FROM foo;
+SELECT pgv_select('vars', 'r2');
+
+SELECT pgv_insert('vars', 'r3', row(1, 'str1'::text));
+SELECT pgv_insert('vars', 'r3', foo) FROM foo;
+SELECT pgv_select('vars', 'r3');

@@ -1145,3 +1145,21 @@ COMMIT;
 
 DROP VIEW pgv_stats_view;
 SELECT pgv_free();
+
+---
+--- Test case for issue #32 [PGPRO-4456]
+---
+CREATE TEMP TABLE tab (id int, t varchar);
+INSERT INTO tab VALUES (0, 'str00');
+
+SELECT pgv_insert('vars', 'r1', row(1, 'str1', 'str2'));
+SELECT pgv_insert('vars', 'a', tab) FROM tab;
+SELECT pgv_insert('vars', 'r1', tab) FROM tab;
+SELECT pgv_select('vars', 'r1');
+
+SELECT pgv_insert('vars', 'r2', row(1, 'str1'::varchar));
+SELECT pgv_insert('vars', 'b', tab) FROM tab;
+SELECT pgv_insert('vars', 'r2', tab) FROM tab;
+SELECT pgv_select('vars', 'r2');
+
+SELECT pgv_free();
