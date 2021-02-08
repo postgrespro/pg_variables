@@ -2119,7 +2119,6 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 	/* Nothing to do here if trans object was removed already. */
 	if (dlist_is_empty(&object->states))
 	{
-		/* Probably redundant. */
 		removeObject(object, type);
 		return;
 	}
