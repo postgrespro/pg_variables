@@ -1163,3 +1163,9 @@ SELECT pgv_insert('vars', 'r2', tab) FROM tab;
 SELECT pgv_select('vars', 'r2');
 
 SELECT pgv_free();
+
+
+--
+-- Test case for issue #38 [PGPRO-4676]
+--
+SELECT pgv_insert('test', 'x5', ROW ((2::int, 1::int)), TRUE);
