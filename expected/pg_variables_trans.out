@@ -3829,3 +3829,8 @@ SELECT pgv_free();
  
 (1 row)
 
+--
+-- Test case for issue #38 [PGPRO-4676]
+--
+SELECT pgv_insert('test', 'x5', ROW ((2::int, 1::int)), TRUE);
+ERROR:  could not identify a hash function for type record
