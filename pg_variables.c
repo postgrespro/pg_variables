@@ -2494,7 +2494,7 @@ compatibility_check(void)
 			if (!pg_compatibility_check_no_error())
 				freeStatsLists();
 
-			PG_COMPATIBILITY_CHECK("pg_variables");
+			PG_COMPATIBILITY_CHECK(pg_variables);
 		}
 #		endif /* PG_COMPATIBILITY_CHECK */
 #	endif /* PG_VERSION_NUM */
