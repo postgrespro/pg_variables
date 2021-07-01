@@ -1489,7 +1489,9 @@ getMemoryTotalSpace(MemoryContext context, int level, Size *totalspace)
 
 	/* Examine the context itself */
 	memset(&totals, 0, sizeof(totals));
-#if PG_VERSION_NUM >= 110000
+#if PG_VERSION_NUM >= 140000
+	(*context->methods->stats) (context, NULL, NULL, &totals, true);
+#elif PG_VERSION_NUM >= 110000
 	(*context->methods->stats) (context, NULL, NULL, &totals);
 #else
 	(*context->methods->stats) (context, level, false, &totals);
@@ -1641,7 +1643,11 @@ ensurePackagesHashExists(void)
 
 	packagesHash = hash_create("Packages hash",
 							   NUMPACKAGES, &ctl,
-							   HASH_ELEM | HASH_CONTEXT);
+							   HASH_ELEM | 
+#							   if PG_VERSION_NUM >= 140000
+							   HASH_STRINGS |
+#							   endif
+							   HASH_CONTEXT);
 }
 
 /*
@@ -1668,7 +1674,11 @@ makePackHTAB(Package *package, bool is_trans)
 	ctl.hcxt = *context;
 
 	*htab = hash_create(hash_name, NUMVARIABLES, &ctl,
-						HASH_ELEM | HASH_CONTEXT);
+						HASH_ELEM |
+#						if PG_VERSION_NUM >= 140000
+						HASH_STRINGS |
+#						endif
+						HASH_CONTEXT);
 }
 
 static void
@@ -2494,7 +2504,7 @@ compatibility_check(void)
 			if (!pg_compatibility_check_no_error())
 				freeStatsLists();
 
-			PG_COMPATIBILITY_CHECK("pg_variables");
+			PG_COMPATIBILITY_CHECK(pg_variables);
 		}
 #		endif /* PG_COMPATIBILITY_CHECK */
 #	endif /* PG_VERSION_NUM */
