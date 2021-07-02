@@ -1,3 +1,7 @@
+os: linux
+
+dist: focal
+
 language: c
 
 services:
