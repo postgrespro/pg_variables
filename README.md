@@ -1,6 +1,6 @@
 # pg_variables - session variables with various types
 
-[![Build Status](https://travis-ci.org/postgrespro/pg_variables.svg?branch=master)](https://travis-ci.org/postgrespro/pg_variables)
+[![Build Status](https://travis-ci.com/postgrespro/pg_variables.svg?branch=master)](https://travis-ci.com/postgrespro/pg_variables)
 [![codecov](https://codecov.io/gh/postgrespro/pg_variables/branch/master/graph/badge.svg)](https://codecov.io/gh/postgrespro/pg_variables)
 [![GitHub license](https://img.shields.io/badge/license-PostgreSQL-blue.svg)](https://raw.githubusercontent.com/postgrespro/pg_variables/master/README.md)
 
