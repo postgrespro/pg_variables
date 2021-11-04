@@ -52,12 +52,21 @@ typedef struct ScalarVar
 	int16		typlen;
 }			ScalarVar;
 
+/* Object levels (subxact + atx) */
+typedef struct Levels
+{
+	int				 level;
+#ifdef PGPRO_EE
+	int				 atxlevel;
+#endif
+} Levels;
+
 /* State of TransObject instance */
 typedef struct TransState
 {
 	dlist_node	node;
 	bool		is_valid;
-	int			level;
+	Levels		levels;
 } TransState;
 
 /* List node that stores one of the package's states */
@@ -85,6 +94,17 @@ typedef struct TransObject
 	dlist_head	states;
 }			TransObject;
 
+#ifdef PGPRO_EE
+/* Package context for save transactional part of package */
+typedef struct PackageContext
+{
+	HTAB		 *varHashTransact;
+	MemoryContext hctxTransact;
+	TransState	 *state;
+	struct PackageContext *next;
+}			PackageContext;
+#endif
+
 /* Transactional package */
 typedef struct Package
 {
@@ -94,6 +114,9 @@ typedef struct Package
 	/* Memory context for package variables for easy memory release */
 	MemoryContext hctxRegular,
 				hctxTransact;
+#ifdef PGPRO_EE
+	PackageContext *context;
+#endif
 }			Package;
 
 /* Transactional variable */
