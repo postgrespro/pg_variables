@@ -2533,6 +2533,46 @@ typedef enum Action
 }			Action;
 
 /*
+ * Apply savepoint actions on list of variables or packages.
+ */
+static void
+applyAction(Action action, TransObjectType type, dlist_head *list)
+{
+	dlist_iter	iter;
+
+	dlist_foreach(iter, list)
+	{
+		ChangedObject *co = dlist_container(ChangedObject, node, iter.cur);
+		TransObject *object = co->object;
+
+		switch (action)
+		{
+			case ROLLBACK_TO_SAVEPOINT:
+				rollbackSavepoint(object, type);
+				break;
+			case RELEASE_SAVEPOINT:
+
+				/*
+				 * If package was removed in current transaction level mark
+				 * var as removed. We do not check pack_state->level, because
+				 * var cannot get in list of changes until pack is removed.
+				 */
+				if (type == TRANS_VARIABLE)
+				{
+					Variable   *variable = (Variable *) object;
+					Package    *package = variable->package;
+
+					if (!GetActualState(package)->is_valid)
+						GetActualState(variable)->is_valid = false;
+				}
+
+				releaseSavepoint(object, type);
+				break;
+		}
+	}
+}
+
+/*
  * Iterate variables and packages from list of changes and
  * apply corresponding action on them
  */
@@ -2540,53 +2580,14 @@ static void
 processChanges(Action action)
 {
 	ChangesStackNode *bottom_list;
-	int			i;
 
 	Assert(changesStack && changesStackContext);
 	/* List removed from stack but we still can use it */
 	bottom_list = dlist_container(ChangesStackNode, node,
 								  dlist_pop_head_node(changesStack));
 
-	/*
-	 * i: 1 - manage variables 0 - manage packages
-	 */
-	for (i = 1; i > -1; i--)
-	{
-		dlist_iter	iter;
-
-		dlist_foreach(iter, i ? bottom_list->changedVarsList :
-					  bottom_list->changedPacksList)
-		{
-			ChangedObject *co = dlist_container(ChangedObject, node, iter.cur);
-			TransObject *object = co->object;
-
-			switch (action)
-			{
-				case ROLLBACK_TO_SAVEPOINT:
-					rollbackSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
-					break;
-				case RELEASE_SAVEPOINT:
-
-					/*
-					 * If package was removed in current transaction level
-					 * mark var as removed. We do not check pack_state->level,
-					 * because var cannot get in list of changes until pack is
-					 * removed.
-					 */
-					if (i)
-					{
-						Variable   *variable = (Variable *) object;
-						Package    *package = variable->package;
-
-						if (!GetActualState(package)->is_valid)
-							GetActualState(variable)->is_valid = false;
-					}
-
-					releaseSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
-					break;
-			}
-		}
-	}
+	applyAction(action, TRANS_VARIABLE, bottom_list->changedVarsList);
+	applyAction(action, TRANS_PACKAGE, bottom_list->changedPacksList);
 
 	/* Remove changes list of current level */
 	MemoryContextDelete(bottom_list->ctx);
