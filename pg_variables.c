@@ -3,7 +3,7 @@
  * pg_variables.c
  *	  Functions, which get or set variables values
  *
- * Copyright (c) 2015-2016, Postgres Professional
+ * Copyright (c) 2015-2021, Postgres Professional
  *
  *-------------------------------------------------------------------------
  */
@@ -77,12 +77,17 @@ static void addToChangesStackUpperLevel(TransObject *object,
 										TransObjectType type);
 static void pushChangesStack(void);
 
-static int numOfRegVars(Package *package);
+static int	numOfRegVars(Package *package);
+
+#ifdef PGPRO_EE
+static void pgvSaveContext(void);
+static void pgvRestoreContext(void);
+#endif
 
 /* Constructors */
 static void makePackHTAB(Package *package, bool is_trans);
-static inline ChangedObject *makeChangedObject(TransObject *object,
-											   MemoryContext ctx);
+static inline ChangedObject * makeChangedObject(TransObject *object,
+												MemoryContext ctx);
 static void initObjectHistory(TransObject *object, TransObjectType type);
 
 /* Hook functions */
@@ -100,7 +105,7 @@ do { \
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
 				 errmsg("variable name can not be NULL"))); \
 } while(0)
-#else			/* PG_VERSION_NUM < 120000 */
+#else							/* PG_VERSION_NUM < 120000 */
 #define CHECK_ARGS_FOR_NULL() \
 do { \
 	if (fcinfo->argnull[0]) \
@@ -112,13 +117,14 @@ do { \
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
 				 errmsg("variable name can not be NULL"))); \
 } while(0)
-#endif			/* PG_VERSION_NUM */
+#endif							/* PG_VERSION_NUM */
 
 static HTAB *packagesHash = NULL;
 static MemoryContext ModuleContext = NULL;
 
 /* Recent package */
 static Package *LastPackage = NULL;
+
 /* Recent variable */
 static Variable *LastVariable = NULL;
 
@@ -149,18 +155,34 @@ static List *packages_stats = NIL;
 
 typedef struct tagVariableStatEntry
 {
-	HTAB			*hash;
-	HASH_SEQ_STATUS	*status;
-	Variable		*variable;
-	Package			*package;
-	int				 level;
-} VariableStatEntry;
+	HTAB	   *hash;
+	HASH_SEQ_STATUS *status;
+	Variable   *variable;
+	Package    *package;
+	Levels		levels;
+}			VariableStatEntry;
 
 typedef struct tagPackageStatEntry
 {
-	HASH_SEQ_STATUS	*status;
-	int				 level;
-} PackageStatEntry;
+	HASH_SEQ_STATUS *status;
+	Levels		levels;
+}			PackageStatEntry;
+
+#ifdef PGPRO_EE
+/*
+ * Context for storing/restoring parameters when switching autonomous
+ * transactions
+ */
+typedef struct PgvContextStruct
+{
+	dlist_head *changesStack;
+	MemoryContext changesStackContext;
+	struct PgvContextStruct *next;
+} PgvContextStruct;
+
+static PgvContextStruct *pgv_context = NULL;
+
+#endif							/* PGPRO_EE */
 
 /*
  * Compare functions for VariableStatEntry and PackageStatEntry members.
@@ -192,7 +214,12 @@ VariableStatEntry_eq_all(void *entry, void *value)
 static bool
 VariableStatEntry_level_eq(void *entry, void *value)
 {
-	return ((VariableStatEntry *) entry)->level == *(int *) value;
+	return
+#ifdef PGPRO_EE
+	/* Compare ATX level */
+		((VariableStatEntry *) entry)->levels.atxlevel == ((Levels *) value)->atxlevel &&
+#endif
+		((VariableStatEntry *) entry)->levels.level == ((Levels *) value)->level;
 }
 
 static bool
@@ -204,8 +231,21 @@ PackageStatEntry_status_eq(void *entry, void *value)
 static bool
 PackageStatEntry_level_eq(void *entry, void *value)
 {
-	return ((PackageStatEntry *) entry)->level == *(int *) value;
+	return
+#ifdef PGPRO_EE
+	/* Compare ATX level */
+		((PackageStatEntry *) entry)->levels.atxlevel == ((Levels *) value)->atxlevel &&
+#endif
+		((PackageStatEntry *) entry)->levels.level == ((Levels *) value)->level;
 }
+
+#ifdef PGPRO_EE
+static bool
+VariableStatEntry_is_transactional(void *entry, void *value)
+{
+	return ((VariableStatEntry *) entry)->variable->is_transactional;
+}
+#endif
 
 /*
  * VariableStatEntry and PackageStatEntry status member getters.
@@ -237,20 +277,22 @@ PackageStatEntry_status_ptr(void *entry)
  */
 typedef struct tagRemoveIfContext
 {
-	List 				**list;					/* target list */
-	void 				*value;					/* value to compare with */
-	bool 				(*eq)(void *, void *);	/* list item eq to value func */
-	HASH_SEQ_STATUS * 	(*getter)(void *);		/* status getter */
-	bool 				match_first;			/* return on first match */
-	bool 				term;					/* hash_seq_term on match */
-} RemoveIfContext;
+	List	  **list;			/* target list */
+	void	   *value;			/* value to compare with */
+	bool		(*eq) (void *, void *); /* list item eq to value func */
+	HASH_SEQ_STATUS *(*getter) (void *);	/* status getter */
+	bool		match_first;	/* return on first match */
+	bool		term;			/* hash_seq_term on match */
+}			RemoveIfContext;
 
 static void
 list_remove_if(RemoveIfContext ctx)
 {
 #if (PG_VERSION_NUM < 130000)
-	ListCell *cell, *next, *prev = NULL;
-	void	 *entry = NULL;
+	ListCell   *cell,
+			   *next,
+			   *prev = NULL;
+	void	   *entry = NULL;
 
 	for (cell = list_head(*ctx.list); cell; cell = next)
 	{
@@ -277,12 +319,13 @@ list_remove_if(RemoveIfContext ctx)
 	}
 #else
 	/*
-	 * See https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=1cff1b95ab6ddae32faa3efe0d95a820dbfdc164
+	 * See
+	 * https://git.postgresql.org/gitweb/?p=postgresql.git;a=commit;h=1cff1b95ab6ddae32faa3efe0d95a820dbfdc164
 	 *
 	 * Version >= 13 have different lists interface.
 	 */
-	ListCell *cell;
-	void	 *entry = NULL;
+	ListCell   *cell;
+	void	   *entry = NULL;
 
 	foreach(cell, *ctx.list)
 	{
@@ -313,13 +356,14 @@ remove_variables_status(List **list, HASH_SEQ_STATUS *status)
 {
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = status,
-		.eq			 = VariableStatEntry_status_eq,
-		.getter		 = VariableStatEntry_status_ptr,
+		.list = list,
+		.value = status,
+		.eq = VariableStatEntry_status_eq,
+		.getter = VariableStatEntry_status_ptr,
 		.match_first = true,
-		.term		 = false
+		.term = false
 	};
+
 	list_remove_if(ctx);
 }
 
@@ -335,13 +379,14 @@ remove_variables_variable(List **list, Variable *variable)
 	 */
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = variable,
-		.eq			 = VariableStatEntry_variable_eq,
-		.getter		 = VariableStatEntry_status_ptr,
+		.list = list,
+		.value = variable,
+		.eq = VariableStatEntry_variable_eq,
+		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term		 = true
+		.term = true
 	};
+
 	list_remove_if(ctx);
 }
 
@@ -353,13 +398,14 @@ remove_variables_package(List **list, Package *package)
 {
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = package,
-		.eq			 = VariableStatEntry_package_eq,
-		.getter		 = VariableStatEntry_status_ptr,
+		.list = list,
+		.value = package,
+		.eq = VariableStatEntry_package_eq,
+		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term		 = true
+		.term = true
 	};
+
 	list_remove_if(ctx);
 }
 
@@ -367,17 +413,18 @@ remove_variables_package(List **list, Package *package)
  * Remove all the entries for level.
  */
 static void
-remove_variables_level(List **list, int level)
+remove_variables_level(List **list, Levels *levels)
 {
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = &level,
-		.eq			 = VariableStatEntry_level_eq,
-		.getter		 = VariableStatEntry_status_ptr,
+		.list = list,
+		.value = levels,
+		.eq = VariableStatEntry_level_eq,
+		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term		 = false
+		.term = false
 	};
+
 	list_remove_if(ctx);
 }
 
@@ -389,13 +436,14 @@ remove_variables_all(List **list)
 {
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = NULL,
-		.eq			 = VariableStatEntry_eq_all,
-		.getter		 = VariableStatEntry_status_ptr,
+		.list = list,
+		.value = NULL,
+		.eq = VariableStatEntry_eq_all,
+		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term		 = true
+		.term = true
 	};
+
 	list_remove_if(ctx);
 }
 
@@ -407,13 +455,14 @@ remove_packages_status(List **list, HASH_SEQ_STATUS *status)
 {
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = status,
-		.eq			 = PackageStatEntry_status_eq,
-		.getter		 = PackageStatEntry_status_ptr,
+		.list = list,
+		.value = status,
+		.eq = PackageStatEntry_status_eq,
+		.getter = PackageStatEntry_status_ptr,
 		.match_first = true,
-		.term		 = false
+		.term = false
 	};
+
 	list_remove_if(ctx);
 }
 
@@ -421,21 +470,44 @@ remove_packages_status(List **list, HASH_SEQ_STATUS *status)
  * Remove all the entries with level for packages list.
  */
 static void
-remove_packages_level(List **list, int level)
+remove_packages_level(List **list, Levels *levels)
 {
 	RemoveIfContext ctx =
 	{
-		.list		 = list,
-		.value		 = &level,
-		.eq			 = PackageStatEntry_level_eq,
-		.getter		 = PackageStatEntry_status_ptr,
+		.list = list,
+		.value = levels,
+		.eq = PackageStatEntry_level_eq,
+		.getter = PackageStatEntry_status_ptr,
 		.match_first = false,
-		.term		 = true
+		.term = true
 	};
+
 	list_remove_if(ctx);
 }
 
+#ifdef PGPRO_EE
+/*
+ * Remove all transactional entries.
+ */
+static void
+remove_variables_transactional(List **list)
+{
+	RemoveIfContext ctx =
+	{
+		.list = list,
+		.value = NULL,
+		.eq = VariableStatEntry_is_transactional,
+		.getter = VariableStatEntry_status_ptr,
+		.match_first = false,
+		.term = true
+	};
+
+	list_remove_if(ctx);
+}
+#endif
+
 static void freeStatsLists(void);
+
 /* Returns a lists of packages and variables changed at current subxact level */
 #define get_actual_changes_list() \
 	( \
@@ -471,7 +543,7 @@ static void
 variable_set(text *package_name, text *var_name,
 			 Oid typid, Datum value, bool is_null, bool is_transactional)
 {
-	Package	   *package;
+	Package    *package;
 	Variable   *variable;
 	ScalarVar  *scalar;
 
@@ -502,7 +574,7 @@ static Datum
 variable_get(text *package_name, text *var_name,
 			 Oid typid, bool *is_null, bool strict)
 {
-	Package	   *package;
+	Package    *package;
 	Variable   *variable;
 	ScalarVar  *scalar;
 
@@ -616,7 +688,7 @@ variable_insert(PG_FUNCTION_ARGS)
 	text	   *package_name;
 	text	   *var_name;
 	HeapTupleHeader rec;
-	Package	   *package;
+	Package    *package;
 	Variable   *variable;
 	bool		is_transactional;
 
@@ -731,7 +803,7 @@ variable_update(PG_FUNCTION_ARGS)
 	text	   *package_name;
 	text	   *var_name;
 	HeapTupleHeader rec;
-	Package	   *package;
+	Package    *package;
 	Variable   *variable;
 	TransObject *transObject;
 	bool		res;
@@ -811,7 +883,7 @@ variable_delete(PG_FUNCTION_ARGS)
 	Oid			value_type;
 	Datum		value;
 	bool		value_is_null = PG_ARGISNULL(2);
-	Package	   *package;
+	Package    *package;
 	Variable   *variable;
 	TransObject *transObject;
 	bool		res;
@@ -885,10 +957,10 @@ variable_select(PG_FUNCTION_ARGS)
 	FuncCallContext *funcctx;
 	HASH_SEQ_STATUS *rstat;
 	HashRecordEntry *item;
-	text			*package_name;
-	text			*var_name;
-	Package			*package;
-	Variable		*variable;
+	text	   *package_name;
+	text	   *var_name;
+	Package    *package;
+	Variable   *variable;
 
 	CHECK_ARGS_FOR_NULL();
 
@@ -902,9 +974,9 @@ variable_select(PG_FUNCTION_ARGS)
 
 	if (SRF_IS_FIRSTCALL())
 	{
-		MemoryContext	 	 oldcontext;
-		RecordVar			*record;
-		VariableStatEntry	*entry;
+		MemoryContext oldcontext;
+		RecordVar  *record;
+		VariableStatEntry *entry;
 
 		record = &(GetActualValue(variable).record);
 		funcctx = SRF_FIRSTCALL_INIT();
@@ -922,8 +994,11 @@ variable_select(PG_FUNCTION_ARGS)
 		entry->status = rstat;
 		entry->variable = variable;
 		entry->package = package;
-		entry->level = GetCurrentTransactionNestLevel();
-		variables_stats = lcons((void *)entry, variables_stats);
+		entry->levels.level = GetCurrentTransactionNestLevel();
+#ifdef PGPRO_EE
+		entry->levels.atxlevel = getNestLevelATX();
+#endif
+		variables_stats = lcons((void *) entry, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
 		PG_FREE_IF_COPY(package_name, 0);
@@ -938,7 +1013,7 @@ variable_select(PG_FUNCTION_ARGS)
 	if (item != NULL)
 	{
 		Assert(!HeapTupleHeaderHasExternal(
-							(HeapTupleHeader) DatumGetPointer(item->tuple)));
+										   (HeapTupleHeader) DatumGetPointer(item->tuple)));
 
 		SRF_RETURN_NEXT(funcctx, item->tuple);
 	}
@@ -957,7 +1032,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	Oid			value_type;
 	Datum		value;
 	bool		value_is_null = PG_ARGISNULL(2);
-	Package	   *package;
+	Package    *package;
 	Variable   *variable;
 
 	HashRecordEntry *item;
@@ -1005,7 +1080,7 @@ variable_select_by_value(PG_FUNCTION_ARGS)
 	if (found)
 	{
 		Assert(!HeapTupleHeaderHasExternal(
-							(HeapTupleHeader) DatumGetPointer(item->tuple)));
+										   (HeapTupleHeader) DatumGetPointer(item->tuple)));
 
 		PG_RETURN_DATUM(item->tuple);
 	}
@@ -1034,7 +1109,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		text	   *package_name;
 		text	   *var_name;
 		ArrayType  *values;
-		Package	   *package;
+		Package    *package;
 		Variable   *variable;
 		MemoryContext oldcontext;
 
@@ -1099,7 +1174,7 @@ variable_select_by_values(PG_FUNCTION_ARGS)
 		if (found)
 		{
 			Assert(!HeapTupleHeaderHasExternal(
-							(HeapTupleHeader) DatumGetPointer(item->tuple)));
+											   (HeapTupleHeader) DatumGetPointer(item->tuple)));
 			SRF_RETURN_NEXT(funcctx, item->tuple);
 		}
 	}
@@ -1117,7 +1192,7 @@ variable_exists(PG_FUNCTION_ARGS)
 {
 	text	   *package_name;
 	text	   *var_name;
-	Package	   *package;
+	Package    *package;
 	Variable   *variable = NULL;
 	char		key[NAMEDATALEN];
 	bool		found = false;
@@ -1179,11 +1254,11 @@ package_exists(PG_FUNCTION_ARGS)
 Datum
 remove_variable(PG_FUNCTION_ARGS)
 {
-	text		   *package_name;
-	text		   *var_name;
-	Package		   *package;
-	Variable	   *variable;
-	TransObject	   *transObject;
+	text	   *package_name;
+	text	   *var_name;
+	Package    *package;
+	Variable   *variable;
+	TransObject *transObject;
 
 	CHECK_ARGS_FOR_NULL();
 
@@ -1231,7 +1306,7 @@ remove_variable(PG_FUNCTION_ARGS)
 Datum
 remove_package(PG_FUNCTION_ARGS)
 {
-	Package	   *package;
+	Package    *package;
 	text	   *package_name;
 
 	if (PG_ARGISNULL(0))
@@ -1255,11 +1330,11 @@ remove_package(PG_FUNCTION_ARGS)
 static void
 removePackageInternal(Package *package)
 {
-	TransObject			*transObject;
-	Variable			*variable;
-	HTAB				*htab;
-	HASH_SEQ_STATUS		 vstat;
-	int					 i;
+	TransObject *transObject;
+	Variable   *variable;
+	HTAB	   *htab;
+	HASH_SEQ_STATUS vstat;
+	int			i;
 
 	/* Mark all the valid variables from package as deleted */
 	for (i = 0; i < 2; i++)
@@ -1300,7 +1375,7 @@ removePackageInternal(Package *package)
 static bool
 isPackageEmpty(Package *package)
 {
-	int var_num = GetPackState(package)->trans_var_num;
+	int			var_num = GetPackState(package)->trans_var_num;
 
 	if (package->varHashRegular)
 		var_num += hash_get_num_entries(package->varHashRegular);
@@ -1327,7 +1402,7 @@ resetVariablesCache(void)
 Datum
 remove_packages(PG_FUNCTION_ARGS)
 {
-	Package	   *package;
+	Package    *package;
 	HASH_SEQ_STATUS pstat;
 
 	/* There is no any packages and variables */
@@ -1389,7 +1464,7 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 		 */
 		if (packagesHash)
 		{
-			Package	   *package;
+			Package    *package;
 			HASH_SEQ_STATUS pstat;
 			int			mRecs = NUMVARIABLES,
 						nRecs = 0;
@@ -1411,7 +1486,8 @@ get_packages_and_variables(PG_FUNCTION_ARGS)
 				/* Get variables list for package */
 				for (i = 0; i < 2; i++)
 				{
-					HTAB *htab = pack_htab(package, i);
+					HTAB	   *htab = pack_htab(package, i);
+
 					if (!htab)
 						continue;
 					hash_seq_init(&vstat, htab);
@@ -1517,7 +1593,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 	FuncCallContext *funcctx;
 	MemoryContext oldcontext;
 	HASH_SEQ_STATUS *rstat;
-	Package	   *package;
+	Package    *package;
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -1541,7 +1617,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 		 */
 		if (packagesHash)
 		{
-			MemoryContext	 ctx;
+			MemoryContext ctx;
 			PackageStatEntry *entry;
 
 			ctx = MemoryContextSwitchTo(TopTransactionContext);
@@ -1552,8 +1628,11 @@ get_packages_stats(PG_FUNCTION_ARGS)
 			funcctx->user_fctx = rstat;
 			entry = palloc0(sizeof(PackageStatEntry));
 			entry->status = rstat;
-			entry->level = GetCurrentTransactionNestLevel();
-			packages_stats = lcons((void *)entry, packages_stats);
+			entry->levels.level = GetCurrentTransactionNestLevel();
+#ifdef PGPRO_EE
+			entry->levels.atxlevel = getNestLevelATX();
+#endif
+			packages_stats = lcons((void *) entry, packages_stats);
 			MemoryContextSwitchTo(ctx);
 		}
 		else
@@ -1643,10 +1722,10 @@ ensurePackagesHashExists(void)
 
 	packagesHash = hash_create("Packages hash",
 							   NUMPACKAGES, &ctl,
-							   HASH_ELEM | 
-#							   if PG_VERSION_NUM >= 140000
+							   HASH_ELEM |
+#if PG_VERSION_NUM >= 140000
 							   HASH_STRINGS |
-#							   endif
+#endif
 							   HASH_CONTEXT);
 }
 
@@ -1656,10 +1735,10 @@ ensurePackagesHashExists(void)
 static void
 makePackHTAB(Package *package, bool is_trans)
 {
-	HASHCTL			ctl;
-	char			hash_name[BUFSIZ];
-	HTAB		  **htab;
-	MemoryContext  *context;
+	HASHCTL		ctl;
+	char		hash_name[BUFSIZ];
+	HTAB	  **htab;
+	MemoryContext *context;
 
 	htab = is_trans ? &package->varHashTransact : &package->varHashRegular;
 	context = is_trans ? &package->hctxTransact : &package->hctxRegular;
@@ -1675,9 +1754,9 @@ makePackHTAB(Package *package, bool is_trans)
 
 	*htab = hash_create(hash_name, NUMVARIABLES, &ctl,
 						HASH_ELEM |
-#						if PG_VERSION_NUM >= 140000
+#if PG_VERSION_NUM >= 140000
 						HASH_STRINGS |
-#						endif
+#endif
 						HASH_CONTEXT);
 }
 
@@ -1696,13 +1775,14 @@ initObjectHistory(TransObject *object, TransObjectType type)
 	/* Initialize state */
 	state->is_valid = true;
 	if (type == TRANS_PACKAGE)
-		((PackState *)state)->trans_var_num = 0;
+		((PackState *) state)->trans_var_num = 0;
 	else
 	{
-		Variable *variable = (Variable *) object;
+		Variable   *variable = (Variable *) object;
+
 		if (!variable->is_record)
 		{
-			VarState * varState = (VarState *) state;
+			VarState   *varState = (VarState *) state;
 			ScalarVar  *scalar = &(varState->value.scalar);
 
 			get_typlenbyval(variable->typid, &scalar->typlen,
@@ -1715,7 +1795,7 @@ initObjectHistory(TransObject *object, TransObjectType type)
 static Package *
 getPackage(text *name, bool strict)
 {
-	Package	   *package;
+	Package    *package;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -1728,8 +1808,8 @@ getPackage(text *name, bool strict)
 
 		if (found && GetActualState(package)->is_valid)
 		{
-			Assert (GetPackState(package)->trans_var_num +
-					numOfRegVars(package) > 0);
+			Assert(GetPackState(package)->trans_var_num +
+				   numOfRegVars(package) > 0);
 			return package;
 		}
 	}
@@ -1737,7 +1817,7 @@ getPackage(text *name, bool strict)
 	if (strict)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					errmsg("unrecognized package \"%s\"", key)));
+				 errmsg("unrecognized package \"%s\"", key)));
 
 	return NULL;
 }
@@ -1745,7 +1825,7 @@ getPackage(text *name, bool strict)
 static Package *
 createPackage(text *name, bool is_trans)
 {
-	Package	   *package;
+	Package    *package;
 	char		key[NAMEDATALEN];
 	bool		found;
 
@@ -1794,6 +1874,9 @@ createPackage(text *name, bool is_trans)
 		package->varHashTransact = NULL;
 		package->hctxRegular = NULL;
 		package->hctxTransact = NULL;
+#ifdef PGPRO_EE
+		package->context = NULL;
+#endif
 		initObjectHistory(&package->transObject, TRANS_PACKAGE);
 	}
 
@@ -1837,19 +1920,19 @@ getVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 			if (variable->typid != typid)
 			{
 				char	   *var_type = DatumGetCString(
-										DirectFunctionCall1(regtypeout,
-											ObjectIdGetDatum(variable->typid)));
+													   DirectFunctionCall1(regtypeout,
+																		   ObjectIdGetDatum(variable->typid)));
 
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("variable \"%s\" requires \"%s\" value",
+						 errmsg("variable \"%s\" requires \"%s\" value",
 								key, var_type)));
 			}
 
 			if (variable->is_record != is_record)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("\"%s\" isn't a %s variable",
+						 errmsg("\"%s\" isn't a %s variable",
 								key, is_record ? "record" : "scalar")));
 		}
 		if (!GetActualState(variable)->is_valid && strict)
@@ -1896,7 +1979,7 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 		if (found)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
+					 errmsg("variable \"%s\" already created as %sTRANSACTIONAL",
 							key, is_transactional ? "NOT " : "")));
 	}
 
@@ -1923,7 +2006,7 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("\"%s\" isn't a %s variable",
-					 		key, is_record ? "record" : "scalar")));
+							key, is_record ? "record" : "scalar")));
 
 		/*
 		 * Savepoint must be created when variable changed in current
@@ -1955,8 +2038,8 @@ createVariableInternal(Package *package, text *name, Oid typid, bool is_record,
 	}
 
 	/*
-	 * If the variable has been created or has just become valid,
-	 * increment the counter of valid transactional variables.
+	 * If the variable has been created or has just become valid, increment
+	 * the counter of valid transactional variables.
 	 */
 	if (is_transactional &&
 		(!found || !GetActualState(variable)->is_valid))
@@ -2041,10 +2124,15 @@ removeObject(TransObject *object, TransObjectType type)
 {
 	bool		found;
 	HTAB	   *hash;
-	Package	   *package = NULL;
+	Package    *package = NULL;
 
 	if (type == TRANS_PACKAGE)
 	{
+#ifdef PGPRO_EE
+		PackageContext *context,
+				   *next;
+#endif
+
 		package = (Package *) object;
 
 		/* Regular variables had already removed */
@@ -2052,15 +2140,30 @@ removeObject(TransObject *object, TransObjectType type)
 			MemoryContextDelete(package->hctxRegular);
 		if (package->hctxTransact)
 			MemoryContextDelete(package->hctxTransact);
+#ifdef PGPRO_EE
+
+		/*
+		 * Remove contexts with transactional part (stored when switching to
+		 * ATX transaction)
+		 */
+		context = package->context;
+		while (context)
+		{
+			next = context->next;
+			pfree(context);
+			context = next;
+		}
+#endif
 		hash = packagesHash;
 	}
 	else
 	{
-		Variable *var = (Variable *) object;
+		Variable   *var = (Variable *) object;
+
 		package = var->package;
 		hash = var->is_transactional ?
-			   var->package->varHashTransact :
-			   var->package->varHashRegular;
+			var->package->varHashTransact :
+			var->package->varHashRegular;
 	}
 
 	/* Remove all object's states */
@@ -2095,7 +2198,7 @@ createSavepoint(TransObject *object, TransObjectType type)
 	{
 		newState = (TransState *) MemoryContextAllocZero(ModuleContext,
 														 sizeof(PackState));
-		((PackState *)newState)->trans_var_num = ((PackState *)prevState)->trans_var_num;
+		((PackState *) newState)->trans_var_num = ((PackState *) prevState)->trans_var_num;
 	}
 	else
 	{
@@ -2142,11 +2245,14 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 		if (dlist_is_empty(&object->states))
 		{
 			/* ...but object is a package and has some regular variables... */
-			if (numOfRegVars((Package *)object) > 0)
+			if (numOfRegVars((Package *) object) > 0)
 			{
 				/* ...create a new state to make package valid. */
 				initObjectHistory(object, type);
-				GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
+#ifdef PGPRO_EE
+				GetActualState(object)->levels.atxlevel = getNestLevelATX();
+#endif
+				GetActualState(object)->levels.level = GetCurrentTransactionNestLevel() - 1;
 				if (!dlist_is_empty(changesStack))
 					addToChangesStackUpperLevel(object, type);
 			}
@@ -2154,11 +2260,12 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 				/* ...or remove an object if it is no longer needed. */
 				removeObject(object, type);
 		}
+
 		/*
-		* But if a package has more states, but hasn't valid variables,
-		* mark it as not valid or remove at top level transaction.
-		*/
-		else if (isPackageEmpty((Package *)object))
+		 * But if a package has more states, but hasn't valid variables, mark
+		 * it as not valid or remove at top level transaction.
+		 */
+		else if (isPackageEmpty((Package *) object))
 		{
 			if (dlist_is_empty(changesStack))
 			{
@@ -2170,7 +2277,10 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 			{
 				createSavepoint(object, type);
 				addToChangesStackUpperLevel(object, type);
-				GetActualState(object)->level = GetCurrentTransactionNestLevel() - 1;
+#ifdef PGPRO_EE
+				GetActualState(object)->levels.atxlevel = getNestLevelATX();
+#endif
+				GetActualState(object)->levels.level = GetCurrentTransactionNestLevel() - 1;
 			}
 			GetActualState(object)->is_valid = false;
 		}
@@ -2190,38 +2300,45 @@ static void
 releaseSavepoint(TransObject *object, TransObjectType type)
 {
 	dlist_head *states = &object->states;
-	Assert(GetActualState(object)->level == GetCurrentTransactionNestLevel());
+
+	Assert(GetActualState(object)->levels.level == GetCurrentTransactionNestLevel());
 
 	/*
-	 * If the object is not valid and does not exist at a higher level
-	 * (or if we complete the transaction) - remove object.
+	 * If the object is not valid and does not exist at a higher level (or if
+	 * we complete the transaction) - remove object.
 	 */
 	if (!GetActualState(object)->is_valid &&
-			(!dlist_has_next(states, dlist_head_node(states)) ||
-			dlist_is_empty(changesStack))
+		(!dlist_has_next(states, dlist_head_node(states)) ||
+		 dlist_is_empty(changesStack))
 		)
 	{
 		removeObject(object, type);
 		return;
 	}
 
- 	/* If object has been changed in upper level -
-	 * replace state of that level with the current one. */
+	/*
+	 * If object has been changed in upper level - replace state of that level
+	 * with the current one.
+	 */
 	if (isObjectChangedInUpperTrans(object))
 	{
 		TransState *stateToDelete;
 		dlist_node *nodeToDelete;
+
 		nodeToDelete = dlist_next_node(states, dlist_head_node(states));
 		stateToDelete = dlist_container(TransState, node, nodeToDelete);
 		removeState(object, type, stateToDelete);
 	}
-	/* If the object does not yet have a record in previous level changesStack,
-	 * create it. */
+
+	/*
+	 * If the object does not yet have a record in previous level
+	 * changesStack, create it.
+	 */
 	else if (!dlist_is_empty(changesStack))
 		addToChangesStackUpperLevel(object, type);
 
 	/* Change subxact level due to release */
-	GetActualState(object)->level--;
+	GetActualState(object)->levels.level--;
 }
 
 static void
@@ -2229,15 +2346,16 @@ addToChangesStackUpperLevel(TransObject *object, TransObjectType type)
 {
 	ChangedObject *co_new;
 	ChangesStackNode *csn;
+
 	/*
-	 * Impossible to push in upper list existing node
-	 * because it was created in another context
+	 * Impossible to push in upper list existing node because it was created
+	 * in another context
 	 */
 	csn = dlist_head_element(ChangesStackNode, node, changesStack);
 	co_new = makeChangedObject(object, csn->ctx);
 	dlist_push_head(type == TRANS_PACKAGE ? csn->changedPacksList :
-											csn->changedVarsList,
-											&co_new->node);
+					csn->changedVarsList,
+					&co_new->node);
 }
 
 /*
@@ -2252,7 +2370,16 @@ isObjectChangedInCurrentTrans(TransObject *object)
 		return false;
 
 	state = GetActualState(object);
-	return state->level == GetCurrentTransactionNestLevel();
+	return
+#ifdef PGPRO_EE
+
+	/*
+	 * We should separate states with equal subxacts but with different ATX
+	 * level
+	 */
+		state->levels.atxlevel == getNestLevelATX() &&
+#endif
+		state->levels.level == GetCurrentTransactionNestLevel();
 }
 
 /*
@@ -2266,13 +2393,34 @@ isObjectChangedInUpperTrans(TransObject *object)
 
 	cur_state = GetActualState(object);
 	if (dlist_has_next(&object->states, &cur_state->node) &&
-		cur_state->level == GetCurrentTransactionNestLevel())
+#ifdef PGPRO_EE
+		cur_state->levels.atxlevel == getNestLevelATX() &&
+#endif
+		cur_state->levels.level == GetCurrentTransactionNestLevel())
 	{
 		prev_state = dlist_container(TransState, node, cur_state->node.next);
-		return prev_state->level == GetCurrentTransactionNestLevel() - 1;
+		return
+#ifdef PGPRO_EE
+
+		/*
+		 * We should separate states with equal subxacts but with different
+		 * ATX level
+		 */
+			prev_state->levels.atxlevel == getNestLevelATX() &&
+#endif
+			prev_state->levels.level == GetCurrentTransactionNestLevel() - 1;
 	}
 	else
-		return cur_state->level == GetCurrentTransactionNestLevel() - 1;
+		return
+#ifdef PGPRO_EE
+
+		/*
+		 * We should separate states with equal subxacts but with different
+		 * ATX level
+		 */
+			cur_state->levels.atxlevel == getNestLevelATX() &&
+#endif
+			cur_state->levels.level == GetCurrentTransactionNestLevel() - 1;
 }
 
 /*
@@ -2367,7 +2515,10 @@ addToChangesStack(TransObject *object, TransObjectType type)
 						csn->changedVarsList, &co->node);
 
 		/* Give this object current subxact level */
-		GetActualState(object)->level = GetCurrentTransactionNestLevel();
+		GetActualState(object)->levels.level = GetCurrentTransactionNestLevel();
+#ifdef PGPRO_EE
+		GetActualState(object)->levels.atxlevel = getNestLevelATX();
+#endif
 	}
 }
 
@@ -2382,6 +2533,46 @@ typedef enum Action
 }			Action;
 
 /*
+ * Apply savepoint actions on list of variables or packages.
+ */
+static void
+applyAction(Action action, TransObjectType type, dlist_head *list)
+{
+	dlist_iter	iter;
+
+	dlist_foreach(iter, list)
+	{
+		ChangedObject *co = dlist_container(ChangedObject, node, iter.cur);
+		TransObject *object = co->object;
+
+		switch (action)
+		{
+			case ROLLBACK_TO_SAVEPOINT:
+				rollbackSavepoint(object, type);
+				break;
+			case RELEASE_SAVEPOINT:
+
+				/*
+				 * If package was removed in current transaction level mark
+				 * var as removed. We do not check pack_state->level, because
+				 * var cannot get in list of changes until pack is removed.
+				 */
+				if (type == TRANS_VARIABLE)
+				{
+					Variable   *variable = (Variable *) object;
+					Package    *package = variable->package;
+
+					if (!GetActualState(package)->is_valid)
+						GetActualState(variable)->is_valid = false;
+				}
+
+				releaseSavepoint(object, type);
+				break;
+		}
+	}
+}
+
+/*
  * Iterate variables and packages from list of changes and
  * apply corresponding action on them
  */
@@ -2389,55 +2580,14 @@ static void
 processChanges(Action action)
 {
 	ChangesStackNode *bottom_list;
-	int			i;
 
 	Assert(changesStack && changesStackContext);
 	/* List removed from stack but we still can use it */
 	bottom_list = dlist_container(ChangesStackNode, node,
 								  dlist_pop_head_node(changesStack));
 
-	/*
-	 * i:
-	 * 1 - manage variables
-	 * 0 - manage packages
-	 */
-	for (i = 1; i > -1; i--)
-	{
-		dlist_iter	iter;
-
-		dlist_foreach(iter, i ? bottom_list->changedVarsList :
-					  bottom_list->changedPacksList)
-		{
-			ChangedObject *co = dlist_container(ChangedObject, node, iter.cur);
-			TransObject *object = co->object;
-
-			switch (action)
-			{
-				case ROLLBACK_TO_SAVEPOINT:
-					rollbackSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
-					break;
-				case RELEASE_SAVEPOINT:
-
-					/*
-					 * If package was removed in current transaction level
-					 * mark var as removed. We do not check pack_state->level,
-					 * because var cannot get in list of changes until pack is
-					 * removed.
-					 */
-					if (i)
-					{
-						Variable   *variable = (Variable *) object;
-						Package	   *package = variable->package;
-
-						if (!GetActualState(package)->is_valid)
-							GetActualState(variable)->is_valid = false;
-					}
-
-					releaseSavepoint(object, i ? TRANS_VARIABLE : TRANS_PACKAGE);
-					break;
-			}
-		}
-	}
+	applyAction(action, TRANS_VARIABLE, bottom_list->changedVarsList);
+	applyAction(action, TRANS_PACKAGE, bottom_list->changedPacksList);
 
 	/* Remove changes list of current level */
 	MemoryContextDelete(bottom_list->ctx);
@@ -2465,55 +2615,180 @@ processChanges(Action action)
 static void
 compatibility_check(void)
 {
-	/*
-	 *  | Edition | ConnPool | ATX | COMPAT_CHECK |
-	 *  -------------------------------------------
-	 *  | std 9.6 | no       | no  | no           |
-	 *  | std 10  | no       | no  | yes          |
-	 *  | std 11  | no       | no  | yes          |
-	 *  | std 12  | no       | no  | yes          |
-	 *  | std 13  | no       | no  | yes          |
-	 *  |  ee 9.6 | no       | yes | no           |
-	 *  |  ee 10  | no       | yes | yes          |
-	 *  |  ee 11  | yes      | yes | yes          |
-	 *  |  ee 12  | yes      | yes | yes          |
-	 *  |  ee 13  | yes      | yes | yes          |
+	/* ----------------------
+	 * | Edition | ConnPool |
+	 * ----------------------
+	 * | std 9.6 | no       |
+	 * | std 10  | no       |
+	 * | std 11  | no       |
+	 * | std 12  | no       |
+	 * | std 13  | no       |
+	 * |  ee 9.6 | no       |
+	 * |  ee 10  | no       |
+	 * |  ee 11  | yes      |
+	 * |  ee 12  | yes      |
+	 * |  ee 13  | yes      |
+	 * ----------------------
 	 */
-#ifdef PGPRO_EE
-
-#	if (PG_VERSION_NUM < 100000)
-		/*
-		 * This versions does not have dedicated macro to check compatibility.
-		 * So, use simple check here for ATX.
-		 */
-		if (getNestLevelATX() != 0)
-		{
-			freeStatsLists();
-			elog(ERROR, "pg_variables extension is not compatible with "
-						"autonomous transactions");
-		}
-#	else
-		/*
-		 * Since ee10 there is PG_COMPATIBILITY_CHECK macro to check compatibility.
-		 * But for some reasons it may not be present at the moment.
-		 * So, if PG_COMPATIBILITY_CHECK macro is not present pg_variables are
-		 * always compatible.
-		 */
-#		ifdef PG_COMPATIBILITY_CHECK
-		{
-			if (!pg_compatibility_check_no_error())
-				freeStatsLists();
-
-			PG_COMPATIBILITY_CHECK(pg_variables);
-		}
-#		endif /* PG_COMPATIBILITY_CHECK */
-#	endif /* PG_VERSION_NUM */
-
-#	undef ATX_CHECK
-#	undef CONNPOOL_CHECK
-
-#endif /* PGPRO_EE */
+#if defined(PGPRO_EE) && PG_VERSION_NUM >= 110000
+	if (!IsDedicatedBackend)
+	{
+		freeStatsLists();
+		elog(ERROR, "pg_variables extension is incompatible with connection pooling");
+	}
+#endif							/* PGPRO_EE */
 }
+
+#ifdef PGPRO_EE
+/*
+ * At the beginning of ATX store the pg_variables's env into
+ * pgv_context.
+ */
+static void
+pgvSaveContext(void)
+{
+	Package    *package;
+	HASH_SEQ_STATUS pstat;
+	PgvContextStruct *sus = MemoryContextAlloc(CurTransactionContext,
+											   sizeof(PgvContextStruct));
+
+	/* Save transactional variables for all packages (in packages structs) */
+	if (packagesHash != NULL)
+	{
+		/* Get packages list */
+		hash_seq_init(&pstat, packagesHash);
+		while ((package = (Package *) hash_seq_search(&pstat)) != NULL)
+		{
+			PackageContext *context = MemoryContextAlloc(ModuleContext,
+														 sizeof(PackageContext));
+
+			context->next = package->context;
+			package->context = context;
+
+			/* Save transactional variables in context */
+			context->hctxTransact = package->hctxTransact;
+			context->varHashTransact = package->varHashTransact;
+
+			/*
+			 * Package structure has a transactional part 'transObject'. This
+			 * part is used in asserts like
+			 * Assert(GetActualState(object)->levels.level ==
+			 * GetCurrentTransactionNestLevel()) But this comparison is not
+			 * valid for ATX transactions because
+			 * 'CurrentTransactionState->nestingLevel' for each of new ATX
+			 * level is starts with 1. We should save package state at start
+			 * of ATX transaction and restore it at finish. No need do this
+			 * for transactional variables (we clean them at end of ATX
+			 * transaction) and regular variables (we modify them directly).
+			 */
+			context->state = GetActualState(&package->transObject);
+
+			package->hctxTransact = NULL;
+			package->varHashTransact = NULL;
+		}
+	}
+
+	/* Remove stats for all transactional variables */
+	remove_variables_transactional(&variables_stats);
+	resetVariablesCache();
+
+	sus->changesStack = changesStack;
+	changesStack = NULL;
+	sus->changesStackContext = changesStackContext;
+	changesStackContext = NULL;
+
+	sus->next = pgv_context;
+	pgv_context = sus;
+}
+
+/*
+ * Restore pg_variables's env pointer from pgv_context.
+ */
+static void
+pgvRestoreContext()
+{
+	Package    *package;
+	HASH_SEQ_STATUS pstat;
+	PgvContextStruct *sus = pgv_context;
+
+	resetVariablesCache();
+	/* Delete changes stack for all transactional variables */
+	if (changesStackContext)
+	{
+		MemoryContextDelete(changesStackContext);
+		changesStack = NULL;
+		changesStackContext = NULL;
+	}
+	/* We just finished ATX => need to free all hash_seq_search scans */
+	freeStatsLists();
+
+	/* Restore transactional variables for all packages */
+	if (packagesHash != NULL)
+	{
+		/* Get packages list */
+		hash_seq_init(&pstat, packagesHash);
+		while ((package = (Package *) hash_seq_search(&pstat)) != NULL)
+		{
+			/*
+			 * Delete context with transactional variables (they are no need
+			 * outside ATX transaction)
+			 */
+			if (package->hctxTransact)
+				MemoryContextDelete(package->hctxTransact);
+
+			/* We have stored context for this package? */
+			if (package->context)
+			{
+				PackageContext *context = package->context;
+				PackageContext *next = context->next;
+				TransObject *object = &package->transObject;
+				TransState *state;
+
+				/* Restore transactional variables from context */
+				package->hctxTransact = context->hctxTransact;
+				package->varHashTransact = context->varHashTransact;
+
+				/* Remove all package states, generated in ATX transaction */
+				while ((state = GetActualState(object)) != context->state)
+				{
+					if (dlist_is_empty(&object->states))
+						elog(ERROR, "pg_variables extension can not find "
+							 "transaction state for package");
+					removeState(object, TRANS_PACKAGE, state);
+				}
+
+				pfree(context);
+				package->context = next;
+			}
+			else
+			{
+				/* Package was created in this autonomous transaction */
+				package->hctxTransact = NULL;
+				package->varHashTransact = NULL;
+
+				/*
+				 * No need to remove package states: for just created package
+				 * we have one state with level = 0
+				 */
+			}
+		}
+	}
+
+	/*
+	 * 'sus' can be NULL in case pg_variables was not initialized at start of
+	 * transaction
+	 */
+	if (sus)
+	{
+		/* Restore changes stack for previous level: */
+		changesStack = sus->changesStack;
+		changesStackContext = sus->changesStackContext;
+
+		pgv_context = sus->next;
+		pfree(sus);
+	}
+}
+#endif							/* PGPRO_EE */
 
 /*
  * Intercept execution during subtransaction processing
@@ -2522,6 +2797,8 @@ static void
 pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 					SubTransactionId parentSubid, void *arg)
 {
+	Levels		levels;
+
 	if (changesStack)
 	{
 		switch (event)
@@ -2541,8 +2818,12 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 		}
 	}
 
-	remove_variables_level(&variables_stats, GetCurrentTransactionNestLevel());
-	remove_packages_level(&packages_stats, GetCurrentTransactionNestLevel());
+	levels.level = GetCurrentTransactionNestLevel();
+#ifdef PGPRO_EE
+	levels.atxlevel = getNestLevelATX();
+#endif
+	remove_variables_level(&variables_stats, &levels);
+	remove_packages_level(&packages_stats, &levels);
 }
 
 /*
@@ -2575,6 +2856,22 @@ pgvTransCallback(XactEvent event, void *arg)
 
 	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_ABORT)
 		freeStatsLists();
+
+#ifdef PGPRO_EE
+	if (getNestLevelATX() > 0)
+	{
+		if (event == XACT_EVENT_START)
+		{						/* on each ATX transaction start */
+			pgvSaveContext();
+		}
+		else if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT ||
+				 event == XACT_EVENT_COMMIT || event == XACT_EVENT_PARALLEL_COMMIT ||
+				 event == XACT_EVENT_PREPARE)
+		{						/* on each ATX transaction finish */
+			pgvRestoreContext();
+		}
+	}
+#endif
 }
 
 /*
@@ -2592,16 +2889,17 @@ variable_ExecutorEnd(QueryDesc *queryDesc)
 }
 
 /*
- * Free hash_seq_search scans 
+ * Free hash_seq_search scans
  */
 static void
 freeStatsLists(void)
 {
-	ListCell		*cell;
+	ListCell   *cell;
 
 	foreach(cell, variables_stats)
 	{
 		VariableStatEntry *entry = (VariableStatEntry *) lfirst(cell);
+
 		hash_seq_term(entry->status);
 	}
 
@@ -2610,6 +2908,7 @@ freeStatsLists(void)
 	foreach(cell, packages_stats)
 	{
 		PackageStatEntry *entry = (PackageStatEntry *) lfirst(cell);
+
 		hash_seq_term(entry->status);
 	}
 

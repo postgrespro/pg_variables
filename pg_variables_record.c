@@ -17,10 +17,10 @@
  * Split tuptoaster.c into three separate files.
  */
 #if PG_VERSION_NUM >= 130000
-#	include "access/detoast.h"
-#	include "access/heaptoast.h"
+#include "access/detoast.h"
+#include "access/heaptoast.h"
 #else
-#	include "access/tuptoaster.h"
+#include "access/tuptoaster.h"
 #endif
 
 #include "catalog/pg_collation.h"
@@ -96,8 +96,8 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 
 	/*
 	 * In case something went wrong, you need to roll back the changes before
-	 * completing the transaction, because the variable may be regular
-	 * and not present in list of changed vars.
+	 * completing the transaction, because the variable may be regular and not
+	 * present in list of changed vars.
 	 */
 	if (!OidIsValid(typentry->hash_proc_finfo.fn_oid))
 	{
@@ -243,7 +243,7 @@ copy_record_tuple(RecordVar *record, HeapTupleHeader tupleHeader)
 	 */
 	if (HeapTupleHeaderHasExternal(tupleHeader))
 		return toast_flatten_tuple_to_datum(tupleHeader,
-									HeapTupleHeaderGetDatumLength(tupleHeader),
+											HeapTupleHeaderGetDatumLength(tupleHeader),
 											tupdesc);
 
 	/*
@@ -267,9 +267,9 @@ get_record_key(Datum tuple, TupleDesc tupdesc, bool *isnull)
 {
 	HeapTupleHeader th = (HeapTupleHeader) DatumGetPointer(tuple);
 	bool		hasnulls = th->t_infomask & HEAP_HASNULL;
-	bits8	   *bp = th->t_bits;		/* ptr to null bitmap in tuple */
-	char	   *tp;						/* ptr to tuple data */
-	long		off;					/* offset in tuple data */
+	bits8	   *bp = th->t_bits;	/* ptr to null bitmap in tuple */
+	char	   *tp;				/* ptr to tuple data */
+	long		off;			/* offset in tuple data */
 	int			keyatt = 0;
 	Form_pg_attribute attr = GetTupleDescAttr(tupdesc, keyatt);
 

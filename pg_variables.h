@@ -42,7 +42,7 @@ typedef struct RecordVar
 	FmgrInfo	hash_proc;
 	/* Match function info */
 	FmgrInfo	cmp_proc;
-}			RecordVar;
+} RecordVar;
 
 typedef struct ScalarVar
 {
@@ -52,19 +52,28 @@ typedef struct ScalarVar
 	int16		typlen;
 }			ScalarVar;
 
+/* Object levels (subxact + atx) */
+typedef struct Levels
+{
+	int			level;
+#ifdef PGPRO_EE
+	int			atxlevel;
+#endif
+} Levels;
+
 /* State of TransObject instance */
 typedef struct TransState
 {
 	dlist_node	node;
 	bool		is_valid;
-	int			level;
+	Levels		levels;
 } TransState;
 
 /* List node that stores one of the package's states */
 typedef struct PackState
 {
-	TransState		state;
-	unsigned long	trans_var_num; /* Number of valid transactional variables */
+	TransState	state;
+	unsigned long trans_var_num;	/* Number of valid transactional variables */
 }			PackState;
 
 /* List node that stores one of the variable's states */
@@ -76,14 +85,25 @@ typedef struct VarState
 		ScalarVar	scalar;
 		RecordVar	record;
 	}			value;
-}			VarState;
+} VarState;
 
 /* Transactional object */
 typedef struct TransObject
 {
 	char		name[NAMEDATALEN];
 	dlist_head	states;
-}			TransObject;
+} TransObject;
+
+#ifdef PGPRO_EE
+/* Package context for save transactional part of package */
+typedef struct PackageContext
+{
+	HTAB	   *varHashTransact;
+	MemoryContext hctxTransact;
+	TransState *state;
+	struct PackageContext *next;
+}			PackageContext;
+#endif
 
 /* Transactional package */
 typedef struct Package
@@ -94,7 +114,10 @@ typedef struct Package
 	/* Memory context for package variables for easy memory release */
 	MemoryContext hctxRegular,
 				hctxTransact;
-}			Package;
+#ifdef PGPRO_EE
+	PackageContext *context;
+#endif
+} Package;
 
 /* Transactional variable */
 typedef struct Variable
@@ -102,6 +125,7 @@ typedef struct Variable
 	TransObject transObject;
 	Package    *package;
 	Oid			typid;
+
 	/*
 	 * We need an additional flag to determine variable's type since we can
 	 * store record type DATUM within scalar variable
@@ -114,7 +138,7 @@ typedef struct Variable
 	 */
 	bool		is_transactional;
 	bool		is_deleted;
-}			Variable;
+} Variable;
 
 typedef struct HashRecordKey
 {

@@ -1,0 +1,465 @@
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+------------------------------
+-- Non-transactional variables
+------------------------------
+select pgv_set('vars', 'int1', 101);
+ pgv_set 
+---------
+ 
+(1 row)
+
+begin;
+	select pgv_set('vars', 'int2', 102);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+		select pgv_set('vars', 'int3', 103);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- 101, 102, 103:
+		select pgv_get('vars', 'int1', null::int), pgv_get('vars', 'int2', null::int), pgv_get('vars', 'int3', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		select pgv_set('vars', 'int1', 1001);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+-- 1001, 102, 103:
+			select pgv_get('vars', 'int1', null::int), pgv_get('vars', 'int2', null::int), pgv_get('vars', 'int3', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			select pgv_set('vars', 'int2', 1002);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		commit;
+	commit;
+WARNING:  there is no transaction in progress
+-- 1001, 1002, 103:
+	select pgv_get('vars', 'int1', null::int), pgv_get('vars', 'int2', null::int), pgv_get('vars', 'int3', null::int);
+ERROR:  unrecognized variable "int3"
+	select pgv_set('vars', 'int3', 1003);
+ pgv_set 
+---------
+ 
+(1 row)
+
+rollback;
+WARNING:  there is no transaction in progress
+-- 1001, 1002, 1003:
+select pgv_get('vars', 'int1', null::int), pgv_get('vars', 'int2', null::int), pgv_get('vars', 'int3', null::int);
+ pgv_get | pgv_get | pgv_get 
+---------+---------+---------
+     101 |     102 |    1003
+(1 row)
+
+-- vars:int1, vars:int2, vars:int3:
+select * from pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+ vars    | int1 | f
+ vars    | int2 | f
+ vars    | int3 | f
+(3 rows)
+
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+--------------------------
+-- Transactional variables
+--------------------------
+select pgv_set('vars', 'int1', 101, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+begin;
+	select pgv_set('vars', 'int2', 102, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+		select pgv_set('vars', 'int3', 103, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- 103:
+		select pgv_get('vars', 'int3', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+			select pgv_set('vars', 'int2', 1002, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- 1002:
+			select pgv_get('vars', 'int2', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		commit;
+-- 103:
+		select pgv_get('vars', 'int3', null::int);
+ERROR:  unrecognized variable "int3"
+	commit;
+WARNING:  there is no transaction in progress
+	select pgv_set('vars', 'int1', 1001, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+-- 1001:
+	select pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+    1001
+(1 row)
+
+-- 102:
+	select pgv_get('vars', 'int2', null::int);
+ERROR:  unrecognized variable "int2"
+rollback;
+WARNING:  there is no transaction in progress
+-- 101:
+select pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+    1001
+(1 row)
+
+-- vars:int1:
+select * from pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+ vars    | int1 | t
+(1 row)
+
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+----------
+-- Cursors
+----------
+select pgv_insert('test', 'x', row (1::int, 2::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+select pgv_insert('test', 'x', row (2::int, 3::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+select pgv_insert('test', 'x', row (3::int, 4::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+select pgv_insert('test', 'y', row (10::int, 20::int), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+select pgv_insert('test', 'y', row (20::int, 30::int), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+select pgv_insert('test', 'y', row (30::int, 40::int), true);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+begin;
+	declare r1_cur cursor for select pgv_select('test', 'x');
+	begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+		begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+			begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+				begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+					begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+						select pgv_insert('test', 'z', row (11::int, 22::int), false);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+						select pgv_insert('test', 'z', row (22::int, 33::int), false);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+						select pgv_insert('test', 'z', row (33::int, 44::int), false);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+						declare r11_cur cursor for select pgv_select('test', 'x');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- (1,2),(2,3):
+						fetch 2 in r11_cur;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+						declare r2_cur cursor for select pgv_select('test', 'y');
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- correct error: unrecognized variable "y"
+						fetch 2 in r2_cur;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+					rollback;
+				rollback;
+WARNING:  there is no transaction in progress
+			rollback;
+WARNING:  there is no transaction in progress
+		rollback;
+WARNING:  there is no transaction in progress
+	rollback;
+WARNING:  there is no transaction in progress
+	declare r2_cur cursor for select pgv_select('test', 'y');
+ERROR:  DECLARE CURSOR can only be used in transaction blocks
+	declare r3_cur cursor for select pgv_select('test', 'z');
+ERROR:  DECLARE CURSOR can only be used in transaction blocks
+-- (1,2),(2,3):
+	fetch 2 in r1_cur;
+ERROR:  cursor "r1_cur" does not exist
+-- (10,20),(20,30):
+	fetch 2 in r2_cur;
+ERROR:  cursor "r2_cur" does not exist
+-- (11,22),(22,33):
+	fetch 2 in r3_cur;
+ERROR:  cursor "r3_cur" does not exist
+rollback;
+WARNING:  there is no transaction in progress
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+------------------------------------------
+-- Savepoint: rollback in main transaction
+------------------------------------------
+begin;
+	select pgv_set('vars', 'trans_int', 101, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+-- 101:
+	select pgv_get('vars', 'trans_int', null::int);
+ pgv_get 
+---------
+     101
+(1 row)
+
+	savepoint sp1;
+	select pgv_set('vars', 'trans_int', 102, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+-- 102:
+	select pgv_get('vars', 'trans_int', null::int);
+ pgv_get 
+---------
+     102
+(1 row)
+
+	begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+		select pgv_set('vars', 'trans_int', 103, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- 103:
+		select pgv_get('vars', 'trans_int', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+	commit;
+-- 102:
+	select pgv_get('vars', 'trans_int', null::int);
+ERROR:  unrecognized package "vars"
+	rollback to sp1;
+ERROR:  ROLLBACK TO SAVEPOINT can only be used in transaction blocks
+commit;
+WARNING:  there is no transaction in progress
+-- 101:
+select pgv_get('vars', 'trans_int', null::int);
+ERROR:  unrecognized package "vars"
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+------------------------------------------------
+-- Savepoint: rollback in autonomous transaction
+------------------------------------------------
+begin;
+	select pgv_set('vars', 'trans_int', 1, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	savepoint sp1;
+	select pgv_set('vars', 'trans_int', 100, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+		begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+			select pgv_set('vars1', 'int1', 2);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			select pgv_set('vars1', 'trans_int1', 3, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			savepoint sp2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			select pgv_set('vars1', 'trans_int1', 4, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- 2
+			select pgv_get('vars1', 'int1', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- 4
+			select pgv_get('vars1', 'trans_int1', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			rollback to sp2;
+ERROR:  no such savepoint
+-- 3
+			select pgv_get('vars1', 'trans_int1', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+-- vars1:int1, vars1:trans_int1:
+			select * from pgv_list() order by package, name;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			select pgv_set('vars1', 'trans_int2', 4, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			select pgv_set('vars1', 'trans_int3', 5, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+			select pgv_set('vars1', 'int2', 3);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		rollback;
+	commit;
+WARNING:  there is no transaction in progress
+	rollback to sp1;
+ERROR:  ROLLBACK TO SAVEPOINT can only be used in transaction blocks
+-- 1
+	select pgv_get('vars', 'trans_int', null::int);
+ERROR:  unrecognized package "vars"
+-- 2
+	select pgv_get('vars1', 'int1', null::int);
+ERROR:  unrecognized package "vars1"
+-- 3
+	select pgv_get('vars1', 'int2', null::int);
+ERROR:  unrecognized package "vars1"
+-- vars:trans_int, vars1:int1, vars1:int2:
+	select * from pgv_list() order by package, name;
+ package | name | is_transactional 
+---------+------+------------------
+(0 rows)
+
+commit;
+WARNING:  there is no transaction in progress
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+------------------------------------------------------------
+-- Sample with (subxact inside ATX) == (subxact outside ATX)
+------------------------------------------------------------
+select pgv_set('vars1', 'int1', 0);
+ pgv_set 
+---------
+ 
+(1 row)
+
+select pgv_set('vars1', 'trans_int1', 0, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+begin;
+	begin autonomous;
+ERROR:  syntax error at or near "autonomous"
+LINE 1: begin autonomous;
+              ^
+		select pgv_set('vars1', 'int1', 1);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		select pgv_set('vars1', 'trans_int1', 2, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		savepoint sp2;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		select pgv_set('vars1', 'trans_int1', 3, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		rollback to sp2;
+ERROR:  no such savepoint
+-- 2
+		select pgv_get('vars1', 'trans_int1', null::int);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+	commit;
+rollback;
+WARNING:  there is no transaction in progress
+-- vars1:int1, vars1:trans_int1
+select * from pgv_list() order by package, name;
+ package |    name    | is_transactional 
+---------+------------+------------------
+ vars1   | int1       | f
+ vars1   | trans_int1 | t
+(2 rows)
+
+-- 1
+select pgv_get('vars1', 'int1', null::int);
+ pgv_get 
+---------
+       0
+(1 row)
+
+-- 0
+select pgv_get('vars1', 'trans_int1', null::int);
+ pgv_get 
+---------
+       0
+(1 row)
+
+select pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
