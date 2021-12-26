@@ -773,8 +773,8 @@ CLOSE r1_cur;
 COMMIT; -- warning
 RESET client_min_messages;
 -- Clean memory after unsuccessful creation of a variable
-SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
-ERROR:  could not identify a hash function for type unknown
+SELECT pgv_insert('vars4', 'r1', row (('str1'::text, 'str1'::text))); -- fail
+ERROR:  could not identify a hash function for type record
 SELECT package FROM pgv_stats() WHERE package = 'vars4';
  package 
 ---------
@@ -954,20 +954,24 @@ SELECT pgv_select('vars', 'r1');
  (1,str1,str2)
 (1 row)
 
-SELECT pgv_insert('vars', 'r2', row(1, 'str1'));
+SELECT pgv_insert('vars', 'r2', row(1, 'str1')); -- ok, UNKNOWNOID of 'str1' converts to TEXTOID
  pgv_insert 
 ------------
  
 (1 row)
 
-SELECT pgv_insert('vars', 'r2', foo) FROM foo;
-ERROR:  new record attribute type for attribute number 2 differs from variable "r2" structure.
-HINT:  You may need explicit type casts.
+SELECT pgv_insert('vars', 'r2', foo) FROM foo; -- ok
+ pgv_insert 
+------------
+ 
+(1 row)
+
 SELECT pgv_select('vars', 'r2');
  pgv_select 
 ------------
  (1,str1)
-(1 row)
+ (0,str00)
+(2 rows)
 
 SELECT pgv_insert('vars', 'r3', row(1, 'str1'::text));
  pgv_insert 
@@ -975,13 +979,47 @@ SELECT pgv_insert('vars', 'r3', row(1, 'str1'::text));
  
 (1 row)
 
-SELECT pgv_insert('vars', 'r3', foo) FROM foo;
+SELECT pgv_insert('vars', 'r3', foo) FROM foo; -- ok, no conversions
  pgv_insert 
 ------------
  
 (1 row)
 
 SELECT pgv_select('vars', 'r3');
+ pgv_select 
+------------
+ (1,str1)
+ (0,str00)
+(2 rows)
+
+SELECT pgv_insert('vars', 'r4', row(1, 2::int));
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'r4', row(0, 'str1')); -- fail, UNKNOWNOID of 'str1' can't be converted to int
+ERROR:  new record attribute type for attribute number 2 differs from variable "r4" structure.
+HINT:  You may need explicit type casts.
+SELECT pgv_select('vars', 'r4');
+ pgv_select 
+------------
+ (1,2)
+(1 row)
+
+SELECT pgv_insert('vars', 'r5', foo) FROM foo; -- types: int, text
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_insert('vars', 'r5', row(1, 'str1')); -- ok, UNKNOWNOID of 'str1' converts to TEXTOID
+ pgv_insert 
+------------
+ 
+(1 row)
+
+SELECT pgv_select('vars', 'r5');
  pgv_select 
 ------------
  (1,str1)

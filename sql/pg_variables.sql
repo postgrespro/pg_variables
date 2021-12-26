@@ -222,7 +222,7 @@ COMMIT; -- warning
 RESET client_min_messages;
 
 -- Clean memory after unsuccessful creation of a variable
-SELECT pgv_insert('vars4', 'r1', row('str1', 'str1')); -- fail
+SELECT pgv_insert('vars4', 'r1', row (('str1'::text, 'str1'::text))); -- fail
 SELECT package FROM pgv_stats() WHERE package = 'vars4';
 
 -- Remove package if it is empty
@@ -268,10 +268,18 @@ SELECT pgv_select('vars', 'r1');
 SELECT pgv_insert('vars', 'r1', foo) FROM foo;
 SELECT pgv_select('vars', 'r1');
 
-SELECT pgv_insert('vars', 'r2', row(1, 'str1'));
-SELECT pgv_insert('vars', 'r2', foo) FROM foo;
+SELECT pgv_insert('vars', 'r2', row(1, 'str1')); -- ok, UNKNOWNOID of 'str1' converts to TEXTOID
+SELECT pgv_insert('vars', 'r2', foo) FROM foo; -- ok
 SELECT pgv_select('vars', 'r2');
 
 SELECT pgv_insert('vars', 'r3', row(1, 'str1'::text));
-SELECT pgv_insert('vars', 'r3', foo) FROM foo;
+SELECT pgv_insert('vars', 'r3', foo) FROM foo; -- ok, no conversions
 SELECT pgv_select('vars', 'r3');
+
+SELECT pgv_insert('vars', 'r4', row(1, 2::int));
+SELECT pgv_insert('vars', 'r4', row(0, 'str1')); -- fail, UNKNOWNOID of 'str1' can't be converted to int
+SELECT pgv_select('vars', 'r4');
+
+SELECT pgv_insert('vars', 'r5', foo) FROM foo; -- types: int, text
+SELECT pgv_insert('vars', 'r5', row(1, 'str1')); -- ok, UNKNOWNOID of 'str1' converts to TEXTOID
+SELECT pgv_select('vars', 'r5');

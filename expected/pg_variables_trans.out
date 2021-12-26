@@ -1858,8 +1858,8 @@ SELECT pgv_insert('package', 'errs',row(1), true);
 (1 row)
 
 -- Variable should not exists in case when error occurs during creation
-SELECT pgv_insert('vars4', 'r1', row('str1', 'str1'));
-ERROR:  could not identify a hash function for type unknown
+SELECT pgv_insert('vars4', 'r1', row (('str1'::text, 'str1'::text)));
+ERROR:  could not identify a hash function for type record
 SELECT pgv_select('vars4', 'r1', 0);
 ERROR:  unrecognized package "vars4"
 -- If variable created and removed in same transaction level,
