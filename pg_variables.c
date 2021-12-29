@@ -2628,9 +2628,11 @@ compatibility_check(void)
 	 * |  ee 11  | yes      |
 	 * |  ee 12  | yes      |
 	 * |  ee 13  | yes      |
+	 * |  ee 14  | no       |
+	 * |  ee 15  | no       |
 	 * ----------------------
 	 */
-#if defined(PGPRO_EE) && PG_VERSION_NUM >= 110000
+#if defined(PGPRO_EE) && PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 140000
 	if (!IsDedicatedBackend)
 	{
 		freeStatsLists();
