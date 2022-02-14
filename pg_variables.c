@@ -119,6 +119,10 @@ do { \
 } while(0)
 #endif							/* PG_VERSION_NUM */
 
+/* User controlled GUCs */
+bool convert_unknownoid_guc;
+bool convert_unknownoid;
+
 static HTAB *packagesHash = NULL;
 static MemoryContext ModuleContext = NULL;
 
@@ -773,6 +777,14 @@ variable_insert(PG_FUNCTION_ARGS)
 		/*
 		 * This is the first record for the var_name. Initialize record.
 		 */
+		/* Convert UNKNOWNOID to TEXTOID if needed
+		 * tupdesc may be changed
+		 */
+		if (convert_unknownoid)
+		{
+			coerce_unknown_first_record(&tupdesc, &rec);
+		}
+
 		init_record(record, tupdesc, variable);
 		variable->is_deleted = false;
 	}
@@ -781,8 +793,11 @@ variable_insert(PG_FUNCTION_ARGS)
 		/*
 		 * We need to check attributes of the new row if this is a transient
 		 * record type or if last record has different id.
+		 * Also we convert UNKNOWNOID to TEXTOID if needed.
+		 * tupdesc may be changed
 		 */
-		check_attributes(variable, tupdesc);
+		check_attributes(variable, &rec, tupdesc);
+
 	}
 
 	insert_record(variable, rec);
@@ -863,7 +878,11 @@ variable_update(PG_FUNCTION_ARGS)
 	tupTypmod = HeapTupleHeaderGetTypMod(rec);
 
 	tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
-	check_attributes(variable, tupdesc);
+	/*
+	 * Convert UNKNOWNOID to TEXTOID if needed
+	 * tupdesc may be changed
+	 */
+	check_attributes(variable, &rec, tupdesc);
 	ReleaseTupleDesc(tupdesc);
 
 	res = update_record(variable, rec);
@@ -2921,6 +2940,17 @@ freeStatsLists(void)
 void
 _PG_init(void)
 {
+	DefineCustomBoolVariable("pg_variables.convert_unknownoid",
+							 "Use \'TEXT\' format for all values of \'UNKNOWNOID\', default is true.",
+							 NULL,
+						     &convert_unknownoid,
+							 true,
+							 PGC_USERSET,
+							 0, /* FLAGS??? */
+							 NULL,
+							 NULL,
+							 NULL);
+
 	RegisterXactCallback(pgvTransCallback, NULL);
 	RegisterSubXactCallback(pgvSubTransCallback, NULL);
 

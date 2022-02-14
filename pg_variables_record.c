@@ -25,8 +25,11 @@
 
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "parser/parse_type.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/lsyscache.h"
+#include "utils/syscache.h"
 #include "utils/memutils.h"
 #include "utils/typcache.h"
 
@@ -172,14 +175,118 @@ init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable)
 	MemoryContextSwitchTo(oldcxt);
 }
 
+/* Check if any attributes of type UNKNOWNOID are in given tupdesc */
+static int
+is_unknownoid_in_tupdesc(TupleDesc tupdesc)
+{
+	int 	i = 0;
+	for (i = 0; i < tupdesc->natts; i++)
+	{
+		Form_pg_attribute attr = GetTupleDescAttr(tupdesc, i);
+
+		if (attr->atttypid == UNKNOWNOID)
+			return true;
+
+	}
+	return false;
+}
+
+/* Replace all attributes of type UNKNOWNOID to TEXTOID in given tupdesc */
+static void
+coerce_unknown_rewrite_tupdesc(TupleDesc old_tupdesc, TupleDesc *return_tupdesc)
+{
+	int 		i;
+
+	(*return_tupdesc) = CreateTupleDescCopy(old_tupdesc);
+
+	for (i = 0; i < old_tupdesc->natts; i++)
+	{
+		Form_pg_attribute attr = GetTupleDescAttr(old_tupdesc, i);
+
+		if (attr->atttypid == UNKNOWNOID)
+		{
+			FormData_pg_attribute new_attr = *attr;
+
+			new_attr.atttypid = TEXTOID;
+			new_attr.attlen = -1;
+			new_attr.atttypmod = -1;
+			memcpy(TupleDescAttr((*return_tupdesc), i), &new_attr, sizeof(FormData_pg_attribute));
+		}
+	}
+}
+
+/*
+ * Deform tuple with old_tupdesc, coerce values of type UNKNOWNOID to TEXTOID, form tuple with new_tupdesc.
+ * new_tupdesc must have the same attributes as old_tupdesc except such of types UNKNOWNOID -- they must be of TEXTOID type
+ */
+static void
+reconstruct_tuple(TupleDesc old_tupdesc, TupleDesc new_tupdesc, HeapTupleHeader *rec)
+{
+	HeapTupleData tuple;
+	HeapTuple	newtup;
+	Datum 	   *values = (Datum*)palloc(old_tupdesc->natts * sizeof(Datum));
+	bool	   *isnull = (bool*)palloc(old_tupdesc->natts * sizeof(bool));
+	Oid			baseTypeId = UNKNOWNOID;
+	int32		baseTypeMod = -1;
+	int32		inputTypeMod = -1;
+	Type		baseType = NULL;
+	int 		i;
+
+	baseTypeId = getBaseTypeAndTypmod(TEXTOID, &baseTypeMod);
+	baseType = typeidType(baseTypeId);
+	/* Build a temporary HeapTuple control structure */
+	tuple.t_len = HeapTupleHeaderGetDatumLength(*rec);
+	tuple.t_data = *rec;
+	heap_deform_tuple(&tuple, old_tupdesc, values, isnull);
+
+	for (i = 0; i < old_tupdesc->natts; i++)
+	{
+		Form_pg_attribute attr = GetTupleDescAttr(old_tupdesc, i);
+
+		if (attr->atttypid == UNKNOWNOID)
+		{
+			values[i] = stringTypeDatum(baseType,
+										DatumGetCString(values[i]),
+										inputTypeMod);
+		}
+	}
+
+	newtup = heap_form_tuple(new_tupdesc, values, isnull);
+	(*rec) = newtup->t_data;
+	pfree(isnull);
+	pfree(values);
+	ReleaseSysCache(baseType);
+}
+
+/*
+ * Used in pg_variables.c insert_record for coercing types in first record in variable.
+ * If there are UNKNOWNOIDs in tupdesc, rewrites it and reconstructs tuple with new tupdesc.
+ * Replaces given tupdesc with the new one.
+ */
+void
+coerce_unknown_first_record(TupleDesc *tupdesc, HeapTupleHeader *rec)
+{
+	TupleDesc	new_tupdesc = NULL;
+
+	if (!is_unknownoid_in_tupdesc(*tupdesc))
+		return;
+
+	coerce_unknown_rewrite_tupdesc(*tupdesc, &new_tupdesc);
+	reconstruct_tuple(*tupdesc, new_tupdesc, rec);
+
+	ReleaseTupleDesc(*tupdesc);
+	(*tupdesc) = new_tupdesc;
+}
+
 /*
  * New record structure should be the same as the first record.
  */
 void
-check_attributes(Variable *variable, TupleDesc tupdesc)
+check_attributes(Variable *variable, HeapTupleHeader *rec, TupleDesc tupdesc)
 {
 	int			i;
 	RecordVar  *record;
+	bool		unknowns = false;
 
 	Assert(variable->typid == RECORDOID);
 
@@ -198,6 +305,16 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 		Form_pg_attribute attr1 = GetTupleDescAttr(record->tupdesc, i),
 					attr2 = GetTupleDescAttr(tupdesc, i);
 
+		/*
+		 * For the sake of convenience, we consider all the unknown types are to be
+		 * a text type.
+		 */
+		if (convert_unknownoid && (attr1->atttypid == TEXTOID) && (attr2->atttypid == UNKNOWNOID))
+		{
+			unknowns = true;
+			continue;
+		}
+
 		if ((attr1->atttypid != attr2->atttypid)
 			|| (attr1->attndims != attr2->attndims)
 			|| (attr1->atttypmod != attr2->atttypmod))
@@ -208,6 +325,9 @@ check_attributes(Variable *variable, TupleDesc tupdesc)
 							i + 1, GetName(variable)),
 					 errhint("You may need explicit type casts.")));
 	}
+
+	if (unknowns)
+		reconstruct_tuple(tupdesc, record->tupdesc, rec);
 }
 
 /*

@@ -16,6 +16,7 @@
 #include "access/tupdesc.h"
 #include "datatype/timestamp.h"
 #include "utils/date.h"
+#include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/numeric.h"
 #include "utils/jsonb.h"
@@ -179,8 +180,12 @@ typedef struct ChangesStackNode
 	MemoryContext ctx;
 }			ChangesStackNode;
 
+/* pg_variables.c */
+extern bool convert_unknownoid;
+
 extern void init_record(RecordVar *record, TupleDesc tupdesc, Variable *variable);
-extern void check_attributes(Variable *variable, TupleDesc tupdesc);
+extern void check_attributes(Variable *variable, HeapTupleHeader *rec, TupleDesc tupdesc);
+extern void coerce_unknown_first_record(TupleDesc *tupdesc, HeapTupleHeader * rec);
 extern void check_record_key(Variable *variable, Oid typid);
 
 extern void insert_record(Variable *variable, HeapTupleHeader tupleHeader);
