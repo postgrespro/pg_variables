@@ -43,7 +43,7 @@ if [ "$LEVEL" = "hardcore" ] || \
 	# enable additional options
 	./configure \
 		CFLAGS='-O0 -ggdb3 -fno-omit-frame-pointer' \
-		--enable-cassert \
+		--enable-cassert --enable-debug \
 		--prefix=$CUSTOM_PG_BIN \
 		--quiet
 
@@ -100,6 +100,7 @@ if [ "$LEVEL" = "nightmare" ]; then
 		--time-stamp=yes \
 		--track-origins=yes \
 		--trace-children=yes \
+		--trace-children-skip="/bin/*,/usr/bin/*,/lib/*" \
 		--gen-suppressions=all \
 		--suppressions=$CUSTOM_PG_SRC/src/tools/valgrind.supp \
 		--suppressions=$PWD/valgrind.supp \
