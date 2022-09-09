@@ -47,7 +47,9 @@ PG_FUNCTION_INFO_V1(get_packages_and_variables);
 PG_FUNCTION_INFO_V1(get_packages_stats);
 
 extern void _PG_init(void);
+#if PG_VERSION_NUM < 150000
 extern void _PG_fini(void);
+#endif
 static void ensurePackagesHashExists(void);
 static void getKeyFromName(text *name, char *key);
 
@@ -2959,6 +2961,7 @@ _PG_init(void)
 	ExecutorEnd_hook = variable_ExecutorEnd;
 }
 
+#if PG_VERSION_NUM < 150000
 /*
  * Unregister callback function when module unloads
  */
@@ -2969,3 +2972,4 @@ _PG_fini(void)
 	UnregisterSubXactCallback(pgvSubTransCallback, NULL);
 	ExecutorEnd_hook = prev_ExecutorEnd;
 }
+#endif
