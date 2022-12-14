@@ -1582,7 +1582,7 @@ getMemoryTotalSpace(MemoryContext context, int level, Size *totalspace)
 	MemoryContext child;
 	MemoryContextCounters totals;
 
-	AssertArg(MemoryContextIsValid(context));
+	Assert(MemoryContextIsValid(context));
 
 	/* Examine the context itself */
 	memset(&totals, 0, sizeof(totals));
