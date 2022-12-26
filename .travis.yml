@@ -35,7 +35,6 @@ env:
     - PG_VERSION=11 LEVEL=nightmare
     - PG_VERSION=11 LEVEL=hardcore
     - PG_VERSION=11
-    - PG_VERSION=10
 
 # XXX: consider fixing nightmare mode
 matrix:
