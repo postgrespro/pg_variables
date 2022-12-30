@@ -2152,6 +2152,18 @@ removeObject(TransObject *object, TransObjectType type)
 #ifdef PGPRO_EE
 		PackageContext *context,
 				   *next;
+
+		/*
+		 * Do not delete package inside autonomous transaction: it could be
+		 * used in parent transaction. But we can delete package without any
+		 * states: this means that the package was created in the current
+		 * transaction.
+		 */
+		if (getNestLevelATX() > 0 && !dlist_is_empty(&object->states))
+		{
+			GetActualState(object)->is_valid = false;
+			return;
+		}
 #endif
 
 		package = (Package *) object;
@@ -2171,6 +2183,8 @@ removeObject(TransObject *object, TransObjectType type)
 		while (context)
 		{
 			next = context->next;
+			if (context->hctxTransact)
+				MemoryContextDelete(context->hctxTransact);
 			pfree(context);
 			context = next;
 		}
@@ -2764,10 +2778,14 @@ pgvRestoreContext()
 				PackageContext *next = context->next;
 				TransObject *object = &package->transObject;
 				TransState *state;
+				bool		actual_valid_state;
 
 				/* Restore transactional variables from context */
 				package->hctxTransact = context->hctxTransact;
 				package->varHashTransact = context->varHashTransact;
+
+				/* Save last actual state of package */
+				actual_valid_state = GetActualState(object)->is_valid;
 
 				/* Remove all package states, generated in ATX transaction */
 				while ((state = GetActualState(object)) != context->state)
@@ -2777,6 +2795,18 @@ pgvRestoreContext()
 							 "transaction state for package");
 					removeState(object, TRANS_PACKAGE, state);
 				}
+
+				/*
+				 * Package could be removed in the autonomous transaction. So
+				 * need to mark it as invalid. Or removed package could be
+				 * re-created - so need to mark it as valid.
+				 */
+				if (actual_valid_state != GetActualState(object)->is_valid)
+					GetActualState(object)->is_valid = actual_valid_state;
+
+				/* Mark empty package as deleted. */
+				if (GetPackState(package)->trans_var_num + numOfRegVars(package) == 0)
+					GetActualState(object)->is_valid = false;
 
 				pfree(context);
 				package->context = next;
