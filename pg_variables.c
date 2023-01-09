@@ -2951,7 +2951,11 @@ freeStatsLists(void)
 	{
 		VariableStatEntry *entry = (VariableStatEntry *) lfirst(cell);
 
+#ifdef PGPRO_EE
+		hash_seq_term_all_levels(entry->status);
+#else
 		hash_seq_term(entry->status);
+#endif
 	}
 
 	variables_stats = NIL;
@@ -2960,7 +2964,11 @@ freeStatsLists(void)
 	{
 		PackageStatEntry *entry = (PackageStatEntry *) lfirst(cell);
 
+#ifdef PGPRO_EE
+		hash_seq_term_all_levels(entry->status);
+#else
 		hash_seq_term(entry->status);
+#endif
 	}
 
 	packages_stats = NIL;

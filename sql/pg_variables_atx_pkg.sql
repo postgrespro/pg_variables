@@ -131,5 +131,16 @@ BEGIN;
 -- ERROR:  unrecognized package "vars"
 	SELECT pgv_get('vars', 'int1', null::int);
 ROLLBACK;
+--
+--
+-- Do not free hash_seq_search scans of parent transaction. 
+--
+BEGIN;
+	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
+	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+	FETCH 1 IN r1_cur;
+	BEGIN AUTONOMOUS;
+	ROLLBACK;
+ROLLBACK;
 
 select pgv_free();
