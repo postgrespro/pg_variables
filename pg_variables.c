@@ -310,7 +310,11 @@ list_remove_if(RemoveIfContext ctx)
 			*ctx.list = list_delete_cell(*ctx.list, cell, prev);
 
 			if (ctx.term)
+#ifdef PGPRO_EE
+				hash_seq_term_all_levels(ctx.getter(entry));
+#else
 				hash_seq_term(ctx.getter(entry));
+#endif
 
 			pfree(ctx.getter(entry));
 			pfree(entry);
@@ -342,7 +346,11 @@ list_remove_if(RemoveIfContext ctx)
 			*ctx.list = foreach_delete_current(*ctx.list, cell);
 
 			if (ctx.term)
+#ifdef PGPRO_EE
+				hash_seq_term_all_levels(ctx.getter(entry));
+#else
 				hash_seq_term(ctx.getter(entry));
+#endif
 
 			pfree(ctx.getter(entry));
 			pfree(entry);
@@ -1338,11 +1346,16 @@ remove_package(PG_FUNCTION_ARGS)
 	package_name = PG_GETARG_TEXT_PP(0);
 
 	package = getPackage(package_name, true);
+	/*
+	 * Need to remove variables before packages because here calls hash_seq_term()
+	 * which uses "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removePackageInternal().
+	 */
+	remove_variables_package(&variables_stats, package);
+
 	removePackageInternal(package);
 
 	resetVariablesCache();
-
-	remove_variables_package(&variables_stats, package);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
@@ -1430,6 +1443,13 @@ remove_packages(PG_FUNCTION_ARGS)
 	if (packagesHash == NULL)
 		PG_RETURN_VOID();
 
+	/*
+	 * Need to remove variables before packages because here calls hash_seq_term()
+	 * which uses "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removePackageInternal().
+	 */
+	remove_variables_all(&variables_stats);
+
 	/* Get packages list */
 	hash_seq_init(&pstat, packagesHash);
 	while ((package = (Package *) hash_seq_search(&pstat)) != NULL)
@@ -1438,7 +1458,6 @@ remove_packages(PG_FUNCTION_ARGS)
 	}
 
 	resetVariablesCache();
-	remove_variables_all(&variables_stats);
 
 	PG_RETURN_VOID();
 }
@@ -2201,13 +2220,18 @@ removeObject(TransObject *object, TransObjectType type)
 			var->package->varHashRegular;
 	}
 
+	/*
+	 * Need to remove variables before state because here calls hash_seq_term()
+	 * which uses "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removeState()->freeValue().
+	 */
+	/* Remove object from hash table */
+	hash_search(hash, object->name, HASH_REMOVE, &found);
+	remove_variables_variable(&variables_stats, (Variable*)object);
+
 	/* Remove all object's states */
 	while (!dlist_is_empty(&object->states))
 		removeState(object, type, GetActualState(object));
-
-	/* Remove object from hash table */
-	hash_search(hash, object->name, HASH_REMOVE, &found);
-	remove_variables_variable(&variables_stats, (Variable *) object);
 
 	/* Remove package if it became empty */
 	if (type == TRANS_VARIABLE && isPackageEmpty(package))

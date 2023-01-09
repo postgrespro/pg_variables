@@ -1,7 +1,7 @@
 --
 -- PGPRO-7614: function pgv_free() inside autonomous transaction
 --
-select pgv_free();
+SELECT pgv_free();
  pgv_free 
 ----------
  
@@ -300,7 +300,8 @@ ROLLBACK;
 WARNING:  there is no transaction in progress
 --
 --
--- Do not free hash_seq_search scans of parent transaction. 
+-- Test for case: do not free hash_seq_search scans of parent transaction
+-- at end of the autonomous transaction.
 --
 BEGIN;
 	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
@@ -309,7 +310,14 @@ BEGIN;
  
 (1 row)
 
+	SELECT pgv_insert('test', 'x', row (3::int, 4::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
 	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+-- (1,2)
 	FETCH 1 IN r1_cur;
  pgv_select 
 ------------
@@ -321,9 +329,53 @@ ERROR:  syntax error at or near "AUTONOMOUS"
 LINE 1: BEGIN AUTONOMOUS;
               ^
 	ROLLBACK;
+-- (3,4)
+	FETCH 1 IN r1_cur;
+ERROR:  cursor "r1_cur" does not exist
+	SELECT pgv_remove('test', 'x');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+-- ERROR:  unrecognized package "test"
+	FETCH 1 IN r1_cur;
+ERROR:  cursor "r1_cur" does not exist
 ROLLBACK;
 WARNING:  there is no transaction in progress
-select pgv_free();
+--
+--
+-- Test for case: pgv_free() should free hash_seq_search scans of all
+-- (current ATX + parent) transactions.
+--
+BEGIN;
+	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+-- (1,2)
+	FETCH 1 IN r1_cur;
+ pgv_select 
+------------
+ (1,2)
+(1 row)
+
+	BEGIN AUTONOMOUS;
+ERROR:  syntax error at or near "AUTONOMOUS"
+LINE 1: BEGIN AUTONOMOUS;
+              ^
+		SELECT pgv_free();
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+	ROLLBACK;
+-- ERROR:  unrecognized package "test"
+	FETCH 1 IN r1_cur;
+ERROR:  cursor "r1_cur" does not exist
+ROLLBACK;
+WARNING:  there is no transaction in progress
+SELECT pgv_free();
  pgv_free 
 ----------
  

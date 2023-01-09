@@ -1,7 +1,7 @@
 --
 -- PGPRO-7614: function pgv_free() inside autonomous transaction
 --
-select pgv_free();
+SELECT pgv_free();
 --
 --
 -- Functions pgv_free() + pgv_get() inside autonomous transaction; package
@@ -133,14 +133,38 @@ BEGIN;
 ROLLBACK;
 --
 --
--- Do not free hash_seq_search scans of parent transaction. 
+-- Test for case: do not free hash_seq_search scans of parent transaction
+-- at end of the autonomous transaction.
+--
+BEGIN;
+	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
+	SELECT pgv_insert('test', 'x', row (3::int, 4::int), false);
+	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+-- (1,2)
+	FETCH 1 IN r1_cur;
+	BEGIN AUTONOMOUS;
+	ROLLBACK;
+-- (3,4)
+	FETCH 1 IN r1_cur;
+	SELECT pgv_remove('test', 'x');
+-- ERROR:  unrecognized package "test"
+	FETCH 1 IN r1_cur;
+ROLLBACK;
+--
+--
+-- Test for case: pgv_free() should free hash_seq_search scans of all
+-- (current ATX + parent) transactions.
 --
 BEGIN;
 	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
 	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+-- (1,2)
 	FETCH 1 IN r1_cur;
 	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
 	ROLLBACK;
+-- ERROR:  unrecognized package "test"
+	FETCH 1 IN r1_cur;
 ROLLBACK;
 
-select pgv_free();
+SELECT pgv_free();
