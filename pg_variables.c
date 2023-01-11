@@ -166,12 +166,14 @@ typedef struct tagVariableStatEntry
 	Variable   *variable;
 	Package    *package;
 	Levels		levels;
+	void	   **user_fctx; /* pointer to funcctx->user_fctx */
 }			VariableStatEntry;
 
 typedef struct tagPackageStatEntry
 {
 	HASH_SEQ_STATUS *status;
 	Levels		levels;
+	void	   **user_fctx; /* pointer to funcctx->user_fctx */
 }			PackageStatEntry;
 
 #ifdef PGPRO_EE
@@ -269,6 +271,25 @@ PackageStatEntry_status_ptr(void *entry)
 }
 
 /*
+ * VariableStatEntry and PackageStatEntry functions for clear function context.
+ */
+static void
+VariableStatEntry_clear_fctx(void *entry)
+{
+	VariableStatEntry *e = (VariableStatEntry *) entry;
+	if (e->user_fctx)
+		*e->user_fctx = NULL;
+}
+
+static void
+PackageStatEntry_clear_fctx(void *entry)
+{
+	PackageStatEntry *e = (PackageStatEntry *) entry;
+	if (e->user_fctx)
+		*e->user_fctx = NULL;
+}
+
+/*
  * Generic remove_if algorithm.
  *
  * For every item in the list:
@@ -289,6 +310,7 @@ typedef struct tagRemoveIfContext
 	HASH_SEQ_STATUS *(*getter) (void *);	/* status getter */
 	bool		match_first;	/* return on first match */
 	bool		term;			/* hash_seq_term on match */
+	void		(*clear_fctx) (void *); /* clear function context */
 }			RemoveIfContext;
 
 static void
@@ -315,6 +337,8 @@ list_remove_if(RemoveIfContext ctx)
 #else
 				hash_seq_term(ctx.getter(entry));
 #endif
+
+			ctx.clear_fctx(entry);
 
 			pfree(ctx.getter(entry));
 			pfree(entry);
@@ -352,6 +376,8 @@ list_remove_if(RemoveIfContext ctx)
 				hash_seq_term(ctx.getter(entry));
 #endif
 
+			ctx.clear_fctx(entry);
+
 			pfree(ctx.getter(entry));
 			pfree(entry);
 
@@ -375,7 +401,8 @@ remove_variables_status(List **list, HASH_SEQ_STATUS *status)
 		.eq = VariableStatEntry_status_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = true,
-		.term = false
+		.term = false,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -398,7 +425,8 @@ remove_variables_variable(List **list, Variable *variable)
 		.eq = VariableStatEntry_variable_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -417,7 +445,8 @@ remove_variables_package(List **list, Package *package)
 		.eq = VariableStatEntry_package_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -436,7 +465,8 @@ remove_variables_level(List **list, Levels *levels)
 		.eq = VariableStatEntry_level_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = false
+		.term = false,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -455,7 +485,8 @@ remove_variables_all(List **list)
 		.eq = VariableStatEntry_eq_all,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -474,7 +505,8 @@ remove_packages_status(List **list, HASH_SEQ_STATUS *status)
 		.eq = PackageStatEntry_status_eq,
 		.getter = PackageStatEntry_status_ptr,
 		.match_first = true,
-		.term = false
+		.term = false,
+		.clear_fctx = PackageStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -493,7 +525,8 @@ remove_packages_level(List **list, Levels *levels)
 		.eq = PackageStatEntry_level_eq,
 		.getter = PackageStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = PackageStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -513,7 +546,8 @@ remove_variables_transactional(List **list)
 		.eq = VariableStatEntry_is_transactional,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -1027,6 +1061,7 @@ variable_select(PG_FUNCTION_ARGS)
 #ifdef PGPRO_EE
 		entry->levels.atxlevel = getNestLevelATX();
 #endif
+		entry->user_fctx = &funcctx->user_fctx;
 		variables_stats = lcons((void *) entry, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
@@ -1035,6 +1070,15 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
+
+	if (funcctx->user_fctx == NULL)
+	{
+		/*
+		 * VariableStatEntry was removed. For example, after call
+		 * 'ROLLBACK TO SAVEPOINT ...'
+		 */
+		SRF_RETURN_DONE(funcctx);
+	}
 
 	/* Get next hash record */
 	rstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
@@ -1672,6 +1716,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 #ifdef PGPRO_EE
 			entry->levels.atxlevel = getNestLevelATX();
 #endif
+			entry->user_fctx = &funcctx->user_fctx;
 			packages_stats = lcons((void *) entry, packages_stats);
 			MemoryContextSwitchTo(ctx);
 		}

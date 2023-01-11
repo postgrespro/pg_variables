@@ -1169,3 +1169,25 @@ SELECT pgv_free();
 -- Test case for issue #38 [PGPRO-4676]
 --
 SELECT pgv_insert('test', 'x5', ROW ((2::int, 1::int)), TRUE);
+
+--
+-- Test case for PGPRO-7614: crash by using cursor after rollback of cursor
+-- creation.
+--
+BEGIN;
+	SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), true);
+	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+	SAVEPOINT sp1;
+	FETCH 1 in r1_cur;
+	ROLLBACK TO SAVEPOINT sp1;
+	FETCH 1 in r1_cur;
+ROLLBACK;
+
+BEGIN;
+	SELECT pgv_insert('test', 'x', ROW (1::int, 2::int), TRUE);
+	DECLARE r1_cur CURSOR FOR SELECT pgv_stats();
+	SAVEPOINT sp1;
+	FETCH 1 in r1_cur;
+	ROLLBACK TO SAVEPOINT sp1;
+	FETCH 1 in r1_cur;
+ROLLBACK;
