@@ -166,5 +166,21 @@ BEGIN;
 -- ERROR:  unrecognized package "test"
 	FETCH 1 IN r1_cur;
 ROLLBACK;
+--
+--
+-- Test for case: pgv_set() created regular a variable; rollback
+-- removes package state and creates a new state to make package valid.
+-- Commit of next autonomous transaction should not replace this new
+-- state (this is not allowed for autonomous transaction).
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 1);
+	ROLLBACK;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 2);
+	COMMIT;
+ROLLBACK;
+SELECT pgv_remove('vars', 'int1');
 
 SELECT pgv_free();

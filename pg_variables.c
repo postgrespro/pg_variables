@@ -2354,7 +2354,14 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 				/* ...create a new state to make package valid. */
 				initObjectHistory(object, type);
 #ifdef PGPRO_EE
-				GetActualState(object)->levels.atxlevel = getNestLevelATX();
+				/*
+				 * Package inside autonomous transaction should not be detected
+				 * as 'object has been changed in upper level' because in this
+				 * case we will remove state in releaseSavepoint() but this
+				 * state may be used pgvRestoreContext(). So atxlevel should
+				 * be 0.
+				 */
+				GetActualState(object)->levels.atxlevel = 0;
 #endif
 				GetActualState(object)->levels.level = GetCurrentTransactionNestLevel() - 1;
 				if (!dlist_is_empty(changesStack))
