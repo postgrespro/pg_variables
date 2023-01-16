@@ -168,7 +168,7 @@ BEGIN;
 ROLLBACK;
 --
 --
--- Test for case: pgv_set() created regular a variable; rollback
+-- Test for case: pgv_set() created a regular variable; rollback
 -- removes package state and creates a new state to make package valid.
 -- Commit of next autonomous transaction should not replace this new
 -- state (this is not allowed for autonomous transaction).
@@ -182,5 +182,22 @@ BEGIN;
 	COMMIT;
 ROLLBACK;
 SELECT pgv_remove('vars', 'int1');
+--
+--
+-- Test for case: pgv_set() created a regular variable and package with
+-- (atxlevel=1, level=1). COMMIT changes this level to (atxlevel=1, level=0).
+-- In the next autonomous transaction (atxlevel=1, level=1) we erroneously
+-- detect that the package changed in upper transaction and remove the
+-- package state (this is not allowed for autonomous transaction).
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 2);
+	COMMIT;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+		SELECT pgv_set('vars', 'int1', 2, true);
+	COMMIT;
+ROLLBACK;
 
 SELECT pgv_free();

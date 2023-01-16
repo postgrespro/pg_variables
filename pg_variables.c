@@ -64,7 +64,7 @@ static void resetVariablesCache(void);
 
 /* Functions to work with transactional objects */
 static void createSavepoint(TransObject *object, TransObjectType type);
-static void releaseSavepoint(TransObject *object, TransObjectType type);
+static void releaseSavepoint(TransObject *object, TransObjectType type, bool sub);
 static void rollbackSavepoint(TransObject *object, TransObjectType type);
 
 static void copyValue(VarState *src, VarState *dest, Variable *destVar);
@@ -2408,11 +2408,14 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
  * Remove previous state of object
  */
 static void
-releaseSavepoint(TransObject *object, TransObjectType type)
+releaseSavepoint(TransObject *object, TransObjectType type, bool sub)
 {
 	dlist_head *states = &object->states;
 
 	Assert(GetActualState(object)->levels.level == GetCurrentTransactionNestLevel());
+#ifdef PGPRO_EE
+	Assert(GetActualState(object)->levels.atxlevel == getNestLevelATX());
+#endif
 
 	/*
 	 * If the object is not valid and does not exist at a higher level (or if
@@ -2438,6 +2441,15 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 
 		nodeToDelete = dlist_next_node(states, dlist_head_node(states));
 		stateToDelete = dlist_container(TransState, node, nodeToDelete);
+#ifdef PGPRO_EE
+		/*
+		 * We can not delete package state inside autonomous transaction
+		 * because the state can be used in pgvRestoreContext().
+		 * Exception: the state was created within this autonomous transaction.
+		 */
+		Assert(type != TRANS_PACKAGE || getNestLevelATX() == 0 ||
+			   stateToDelete->levels.atxlevel == getNestLevelATX());
+#endif
 		removeState(object, type, stateToDelete);
 	}
 
@@ -2450,6 +2462,12 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 
 	/* Change subxact level due to release */
 	GetActualState(object)->levels.level--;
+
+#ifdef PGPRO_EE
+	/* Change ATX level due to finish autonomous transaction */
+	if (!sub && getNestLevelATX() > 0)
+		GetActualState(object)->levels.atxlevel = 0;
+#endif
 }
 
 static void
@@ -2647,7 +2665,7 @@ typedef enum Action
  * Apply savepoint actions on list of variables or packages.
  */
 static void
-applyAction(Action action, TransObjectType type, dlist_head *list)
+applyAction(Action action, TransObjectType type, dlist_head *list, bool sub)
 {
 	dlist_iter	iter;
 
@@ -2677,7 +2695,7 @@ applyAction(Action action, TransObjectType type, dlist_head *list)
 						GetActualState(variable)->is_valid = false;
 				}
 
-				releaseSavepoint(object, type);
+				releaseSavepoint(object, type, sub);
 				break;
 		}
 	}
@@ -2688,7 +2706,7 @@ applyAction(Action action, TransObjectType type, dlist_head *list)
  * apply corresponding action on them
  */
 static void
-processChanges(Action action)
+processChanges(Action action, bool sub)
 {
 	ChangesStackNode *bottom_list;
 
@@ -2697,8 +2715,8 @@ processChanges(Action action)
 	bottom_list = dlist_container(ChangesStackNode, node,
 								  dlist_pop_head_node(changesStack));
 
-	applyAction(action, TRANS_VARIABLE, bottom_list->changedVarsList);
-	applyAction(action, TRANS_PACKAGE, bottom_list->changedPacksList);
+	applyAction(action, TRANS_VARIABLE, bottom_list->changedVarsList, sub);
+	applyAction(action, TRANS_PACKAGE, bottom_list->changedPacksList, sub);
 
 	/* Remove changes list of current level */
 	MemoryContextDelete(bottom_list->ctx);
@@ -2866,10 +2884,10 @@ pgvRestoreContext()
 				/* Remove all package states, generated in ATX transaction */
 				while ((state = GetActualState(object)) != context->state)
 				{
+					removeState(object, TRANS_PACKAGE, state);
 					if (dlist_is_empty(&object->states))
 						elog(ERROR, "pg_variables extension can not find "
 							 "transaction state for package");
-					removeState(object, TRANS_PACKAGE, state);
 				}
 
 				/*
@@ -2935,10 +2953,10 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				compatibility_check();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
-				processChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT, true);
 				break;
 			case SUBXACT_EVENT_ABORT_SUB:
-				processChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT, true);
 				break;
 			case SUBXACT_EVENT_PRE_COMMIT_SUB:
 				break;
@@ -2965,16 +2983,16 @@ pgvTransCallback(XactEvent event, void *arg)
 		{
 			case XACT_EVENT_PRE_COMMIT:
 				compatibility_check();
-				processChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT, false);
 				break;
 			case XACT_EVENT_ABORT:
-				processChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT, false);
 				break;
 			case XACT_EVENT_PARALLEL_PRE_COMMIT:
-				processChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT, false);
 				break;
 			case XACT_EVENT_PARALLEL_ABORT:
-				processChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT, false);
 				break;
 			default:
 				break;
