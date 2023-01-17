@@ -199,5 +199,19 @@ BEGIN;
 		SELECT pgv_set('vars', 'int1', 2, true);
 	COMMIT;
 ROLLBACK;
+--
+--
+-- Test for case: pgv_set() created a regular variable and package with
+-- (atxlevel=1, level=1). ROLLBACK changes this level to (atxlevel=0, level=0).
+-- But ROLLBACK shouldn't change atxlevel in case rollback of sub-transaction.
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SAVEPOINT sp1;
+		SELECT pgv_set('vars1', 'int1', 0);
+		ROLLBACK TO sp1;
+	COMMIT;
+ROLLBACK;
+SELECT pgv_remove('vars1', 'int1');
 
 SELECT pgv_free();

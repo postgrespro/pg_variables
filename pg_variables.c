@@ -65,7 +65,7 @@ static void resetVariablesCache(void);
 /* Functions to work with transactional objects */
 static void createSavepoint(TransObject *object, TransObjectType type);
 static void releaseSavepoint(TransObject *object, TransObjectType type, bool sub);
-static void rollbackSavepoint(TransObject *object, TransObjectType type);
+static void rollbackSavepoint(TransObject *object, TransObjectType type, bool sub);
 
 static void copyValue(VarState *src, VarState *dest, Variable *destVar);
 static void freeValue(VarState *varstate, bool is_record);
@@ -2329,7 +2329,7 @@ numOfRegVars(Package *package)
  * Rollback object to its previous state
  */
 static void
-rollbackSavepoint(TransObject *object, TransObjectType type)
+rollbackSavepoint(TransObject *object, TransObjectType type, bool sub)
 {
 	TransState *state;
 
@@ -2359,9 +2359,9 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 				 * as 'object has been changed in upper level' because in this
 				 * case we will remove state in releaseSavepoint() but this
 				 * state may be used pgvRestoreContext(). So atxlevel should
-				 * be 0.
+				 * be 0 in case rollback of autonomous transaction.
 				 */
-				GetActualState(object)->levels.atxlevel = 0;
+				GetActualState(object)->levels.atxlevel = sub ? getNestLevelATX() : 0;
 #endif
 				GetActualState(object)->levels.level = GetCurrentTransactionNestLevel() - 1;
 				if (!dlist_is_empty(changesStack))
@@ -2677,7 +2677,7 @@ applyAction(Action action, TransObjectType type, dlist_head *list, bool sub)
 		switch (action)
 		{
 			case ROLLBACK_TO_SAVEPOINT:
-				rollbackSavepoint(object, type);
+				rollbackSavepoint(object, type, sub);
 				break;
 			case RELEASE_SAVEPOINT:
 

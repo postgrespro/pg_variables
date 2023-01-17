@@ -446,6 +446,28 @@ LINE 1: BEGIN AUTONOMOUS;
 WARNING:  there is no transaction in progress
 ROLLBACK;
 WARNING:  there is no transaction in progress
+--
+--
+-- Test for case: pgv_set() created a regular variable and package with
+-- (atxlevel=1, level=1). ROLLBACK changes this level to (atxlevel=0, level=0).
+-- But ROLLBACK shouldn't change atxlevel in case rollback of sub-transaction.
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+ERROR:  syntax error at or near "AUTONOMOUS"
+LINE 1: BEGIN AUTONOMOUS;
+              ^
+		SAVEPOINT sp1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		SELECT pgv_set('vars1', 'int1', 0);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		ROLLBACK TO sp1;
+ERROR:  savepoint "sp1" does not exist
+	COMMIT;
+ROLLBACK;
+WARNING:  there is no transaction in progress
+SELECT pgv_remove('vars1', 'int1');
+ERROR:  unrecognized package "vars1"
 SELECT pgv_free();
  pgv_free 
 ----------
