@@ -2951,7 +2951,11 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
+#if defined(PGPRO_EE) && (PG_VERSION_NUM >= 150000)
+	PgproRegisterXactCallback(pgvTransCallback, NULL, XACT_EVENT_KIND_VANILLA | XACT_EVENT_KIND_ATX);
+#else
 	RegisterXactCallback(pgvTransCallback, NULL);
+#endif
 	RegisterSubXactCallback(pgvSubTransCallback, NULL);
 
 	/* Install hooks. */
