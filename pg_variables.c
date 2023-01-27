@@ -166,14 +166,14 @@ typedef struct tagVariableStatEntry
 	Variable   *variable;
 	Package    *package;
 	Levels		levels;
-	void	   **user_fctx; /* pointer to funcctx->user_fctx */
+	void	  **user_fctx; /* pointer to funcctx->user_fctx */
 }			VariableStatEntry;
 
 typedef struct tagPackageStatEntry
 {
 	HASH_SEQ_STATUS *status;
 	Levels		levels;
-	void	   **user_fctx; /* pointer to funcctx->user_fctx */
+	void	  **user_fctx; /* pointer to funcctx->user_fctx */
 }			PackageStatEntry;
 
 #ifdef PGPRO_EE
@@ -1391,8 +1391,9 @@ remove_package(PG_FUNCTION_ARGS)
 
 	package = getPackage(package_name, true);
 	/*
-	 * Need to remove variables before packages because here calls hash_seq_term()
-	 * which uses "entry->status->hashp->frozen" but memory context of "hashp"
+	 * Need to remove variables before removing package because
+	 * remove_variables_package() calls hash_seq_term() which uses
+	 * "entry->status->hashp->frozen" but memory context of "hashp"
 	 * for regular variables can be deleted in removePackageInternal().
 	 */
 	remove_variables_package(&variables_stats, package);
@@ -1488,8 +1489,9 @@ remove_packages(PG_FUNCTION_ARGS)
 		PG_RETURN_VOID();
 
 	/*
-	 * Need to remove variables before packages because here calls hash_seq_term()
-	 * which uses "entry->status->hashp->frozen" but memory context of "hashp"
+	 * Need to remove variables before removing packages because
+	 * remove_variables_all() calls hash_seq_term() which uses
+	 * "entry->status->hashp->frozen" but memory context of "hashp"
 	 * for regular variables can be deleted in removePackageInternal().
 	 */
 	remove_variables_all(&variables_stats);
@@ -2266,9 +2268,10 @@ removeObject(TransObject *object, TransObjectType type)
 	}
 
 	/*
-	 * Need to remove variables before state because here calls hash_seq_term()
-	 * which uses "entry->status->hashp->frozen" but memory context of "hashp"
-	 * for regular variables can be deleted in removeState()->freeValue().
+	 * Need to remove variables before removing state because
+	 * remove_variables_variable() calls hash_seq_term() which uses
+	 * "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removeState() in freeValue().
 	 */
 	/* Remove object from hash table */
 	hash_search(hash, object->name, HASH_REMOVE, &found);
@@ -2358,8 +2361,8 @@ rollbackSavepoint(TransObject *object, TransObjectType type, bool sub)
 				 * Package inside autonomous transaction should not be detected
 				 * as 'object has been changed in upper level' because in this
 				 * case we will remove state in releaseSavepoint() but this
-				 * state may be used pgvRestoreContext(). So atxlevel should
-				 * be 0 in case rollback of autonomous transaction.
+				 * state may be used in pgvRestoreContext(). So atxlevel should
+				 * be 0 in case of rollback of autonomous transaction.
 				 */
 				GetActualState(object)->levels.atxlevel = sub ? getNestLevelATX() : 0;
 #endif
