@@ -1,0 +1,438 @@
+--
+-- PGPRO-7614: function pgv_free() inside autonomous transaction
+--
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+--
+--
+-- Functions pgv_free() + pgv_get() inside autonomous transaction; package
+-- with regular variable; autonomous transaction with commit.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		SELECT pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+       1
+(1 row)
+
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+-- ERROR:  unrecognized package "vars"
+		SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+	COMMIT;
+-- ERROR:  unrecognized package "vars"
+	SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside autonomous transaction; package with
+-- regular variable; autonomous transaction with commit.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+	COMMIT;
+-- ERROR:  unrecognized package "vars"
+	SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside autonomous transaction; package with
+-- regular variable; autonomous transaction with rollback.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+	ROLLBACK;
+-- ERROR:  unrecognized package "vars"
+	SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside autonomous transaction; package with
+-- transactional variable; autonomous transaction with rollback.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+	ROLLBACK;
+	SELECT pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+       1
+(1 row)
+
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside autonomous transaction; package with
+-- transactional variable; autonomous transaction with commit.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+	COMMIT;
+-- ERROR:  unrecognized package "vars"
+	SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside recursive autonomous transactions.
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+		BEGIN AUTONOMOUS;
+			BEGIN AUTONOMOUS;
+				SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+			COMMIT;
+-- ERROR:  unrecognized package "vars"
+			SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+		COMMIT;
+-- ERROR:  unrecognized package "vars"
+		SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+	COMMIT;
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside recursive autonomous transactions;
+-- recreating the package after deletion with using regular
+-- variable.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		BEGIN AUTONOMOUS;
+			SELECT pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+       1
+(1 row)
+
+			BEGIN AUTONOMOUS;
+				SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+			COMMIT;
+-- ERROR:  unrecognized package "vars"
+			SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+		COMMIT;
+		SELECT pgv_set('vars', 'int1', 2);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	COMMIT;
+	SELECT pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+       2
+(1 row)
+
+ROLLBACK;
+--
+--
+-- Function pgv_free() inside recursive autonomous transactions;
+-- recreating the package after deletion with using transactional
+-- variable.
+--
+BEGIN;
+	SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		BEGIN AUTONOMOUS;
+			SELECT pgv_get('vars', 'int1', null::int);
+ pgv_get 
+---------
+       1
+(1 row)
+
+			BEGIN AUTONOMOUS;
+				SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+			COMMIT;
+-- ERROR:  unrecognized package "vars"
+			SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+		COMMIT;
+		SELECT pgv_set('vars', 'int1', 2, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+		SELECT pgv_list();
+   pgv_list    
+---------------
+ (vars,int1,t)
+(1 row)
+
+	COMMIT;
+-- ERROR:  unrecognized package "vars"
+	SELECT pgv_get('vars', 'int1', null::int);
+ERROR:  unrecognized package "vars"
+ROLLBACK;
+--
+--
+-- Test for case: do not free hash_seq_search scans of parent transaction
+-- at end of the autonomous transaction.
+--
+BEGIN;
+	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+	SELECT pgv_insert('test', 'x', row (3::int, 4::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+-- (1,2)
+	FETCH 1 IN r1_cur;
+ pgv_select 
+------------
+ (1,2)
+(1 row)
+
+	BEGIN AUTONOMOUS;
+	ROLLBACK;
+-- (3,4)
+	FETCH 1 IN r1_cur;
+ pgv_select 
+------------
+ (3,4)
+(1 row)
+
+	SELECT pgv_remove('test', 'x');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+-- ERROR:  unrecognized package "test"
+	FETCH 1 IN r1_cur;
+ERROR:  unrecognized package "test"
+ROLLBACK;
+--
+--
+-- Test for case: pgv_free() should free hash_seq_search scans of all
+-- (current ATX + parent) transactions.
+--
+BEGIN;
+	SELECT pgv_insert('test', 'x', row (1::int, 2::int), false);
+ pgv_insert 
+------------
+ 
+(1 row)
+
+	DECLARE r1_cur CURSOR FOR SELECT pgv_select('test', 'x');
+-- (1,2)
+	FETCH 1 IN r1_cur;
+ pgv_select 
+------------
+ (1,2)
+(1 row)
+
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+	ROLLBACK;
+-- ERROR:  unrecognized package "test"
+	FETCH 1 IN r1_cur;
+ERROR:  unrecognized package "test"
+ROLLBACK;
+--
+--
+-- Test for case: pgv_set() created a regular variable; rollback
+-- removes package state and creates a new state to make package valid.
+-- Commit of next autonomous transaction should not replace this new
+-- state (this is not allowed for autonomous transaction).
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 1);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	ROLLBACK;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 2);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	COMMIT;
+ROLLBACK;
+SELECT pgv_remove('vars', 'int1');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+--
+--
+-- Test for case: pgv_set() created a regular variable and package with
+-- (atxlevel=1, level=1). COMMIT changes this level to (atxlevel=1, level=0).
+-- In the next autonomous transaction (atxlevel=1, level=1) we erroneously
+-- detect that the package changed in upper transaction and remove the
+-- package state (this is not allowed for autonomous transaction).
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_set('vars', 'int1', 2);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	COMMIT;
+	BEGIN AUTONOMOUS;
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+		SELECT pgv_set('vars', 'int1', 2, true);
+ pgv_set 
+---------
+ 
+(1 row)
+
+	COMMIT;
+ROLLBACK;
+--
+--
+-- Test for case: pgv_set() created a regular variable and package with
+-- (atxlevel=1, level=1). ROLLBACK changes this level to (atxlevel=0, level=0).
+-- But ROLLBACK shouldn't change atxlevel in case rollback of sub-transaction.
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SAVEPOINT sp1;
+		SELECT pgv_set('vars1', 'int1', 0);
+ pgv_set 
+---------
+ 
+(1 row)
+
+		ROLLBACK TO sp1;
+	COMMIT;
+ROLLBACK;
+SELECT pgv_remove('vars1', 'int1');
+ pgv_remove 
+------------
+ 
+(1 row)
+
+SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+

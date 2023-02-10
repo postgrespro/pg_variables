@@ -64,8 +64,8 @@ static void resetVariablesCache(void);
 
 /* Functions to work with transactional objects */
 static void createSavepoint(TransObject *object, TransObjectType type);
-static void releaseSavepoint(TransObject *object, TransObjectType type);
-static void rollbackSavepoint(TransObject *object, TransObjectType type);
+static void releaseSavepoint(TransObject *object, TransObjectType type, bool sub);
+static void rollbackSavepoint(TransObject *object, TransObjectType type, bool sub);
 
 static void copyValue(VarState *src, VarState *dest, Variable *destVar);
 static void freeValue(VarState *varstate, bool is_record);
@@ -166,12 +166,14 @@ typedef struct tagVariableStatEntry
 	Variable   *variable;
 	Package    *package;
 	Levels		levels;
+	void	  **user_fctx; /* pointer to funcctx->user_fctx */
 }			VariableStatEntry;
 
 typedef struct tagPackageStatEntry
 {
 	HASH_SEQ_STATUS *status;
 	Levels		levels;
+	void	  **user_fctx; /* pointer to funcctx->user_fctx */
 }			PackageStatEntry;
 
 #ifdef PGPRO_EE
@@ -269,6 +271,25 @@ PackageStatEntry_status_ptr(void *entry)
 }
 
 /*
+ * VariableStatEntry and PackageStatEntry functions for clear function context.
+ */
+static void
+VariableStatEntry_clear_fctx(void *entry)
+{
+	VariableStatEntry *e = (VariableStatEntry *) entry;
+	if (e->user_fctx)
+		*e->user_fctx = NULL;
+}
+
+static void
+PackageStatEntry_clear_fctx(void *entry)
+{
+	PackageStatEntry *e = (PackageStatEntry *) entry;
+	if (e->user_fctx)
+		*e->user_fctx = NULL;
+}
+
+/*
  * Generic remove_if algorithm.
  *
  * For every item in the list:
@@ -289,6 +310,7 @@ typedef struct tagRemoveIfContext
 	HASH_SEQ_STATUS *(*getter) (void *);	/* status getter */
 	bool		match_first;	/* return on first match */
 	bool		term;			/* hash_seq_term on match */
+	void		(*clear_fctx) (void *); /* clear function context */
 }			RemoveIfContext;
 
 static void
@@ -310,7 +332,13 @@ list_remove_if(RemoveIfContext ctx)
 			*ctx.list = list_delete_cell(*ctx.list, cell, prev);
 
 			if (ctx.term)
+#ifdef PGPRO_EE
+				hash_seq_term_all_levels(ctx.getter(entry));
+#else
 				hash_seq_term(ctx.getter(entry));
+#endif
+
+			ctx.clear_fctx(entry);
 
 			pfree(ctx.getter(entry));
 			pfree(entry);
@@ -342,7 +370,13 @@ list_remove_if(RemoveIfContext ctx)
 			*ctx.list = foreach_delete_current(*ctx.list, cell);
 
 			if (ctx.term)
+#ifdef PGPRO_EE
+				hash_seq_term_all_levels(ctx.getter(entry));
+#else
 				hash_seq_term(ctx.getter(entry));
+#endif
+
+			ctx.clear_fctx(entry);
 
 			pfree(ctx.getter(entry));
 			pfree(entry);
@@ -367,7 +401,8 @@ remove_variables_status(List **list, HASH_SEQ_STATUS *status)
 		.eq = VariableStatEntry_status_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = true,
-		.term = false
+		.term = false,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -390,7 +425,8 @@ remove_variables_variable(List **list, Variable *variable)
 		.eq = VariableStatEntry_variable_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -409,7 +445,8 @@ remove_variables_package(List **list, Package *package)
 		.eq = VariableStatEntry_package_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -428,7 +465,8 @@ remove_variables_level(List **list, Levels *levels)
 		.eq = VariableStatEntry_level_eq,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = false
+		.term = false,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -447,7 +485,8 @@ remove_variables_all(List **list)
 		.eq = VariableStatEntry_eq_all,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -466,7 +505,8 @@ remove_packages_status(List **list, HASH_SEQ_STATUS *status)
 		.eq = PackageStatEntry_status_eq,
 		.getter = PackageStatEntry_status_ptr,
 		.match_first = true,
-		.term = false
+		.term = false,
+		.clear_fctx = PackageStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -485,7 +525,8 @@ remove_packages_level(List **list, Levels *levels)
 		.eq = PackageStatEntry_level_eq,
 		.getter = PackageStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = PackageStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -505,7 +546,8 @@ remove_variables_transactional(List **list)
 		.eq = VariableStatEntry_is_transactional,
 		.getter = VariableStatEntry_status_ptr,
 		.match_first = false,
-		.term = true
+		.term = true,
+		.clear_fctx = VariableStatEntry_clear_fctx
 	};
 
 	list_remove_if(ctx);
@@ -1019,6 +1061,7 @@ variable_select(PG_FUNCTION_ARGS)
 #ifdef PGPRO_EE
 		entry->levels.atxlevel = getNestLevelATX();
 #endif
+		entry->user_fctx = &funcctx->user_fctx;
 		variables_stats = lcons((void *) entry, variables_stats);
 
 		MemoryContextSwitchTo(oldcontext);
@@ -1027,6 +1070,15 @@ variable_select(PG_FUNCTION_ARGS)
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
+
+	if (funcctx->user_fctx == NULL)
+	{
+		/*
+		 * VariableStatEntry was removed. For example, after call
+		 * 'ROLLBACK TO SAVEPOINT ...'
+		 */
+		SRF_RETURN_DONE(funcctx);
+	}
 
 	/* Get next hash record */
 	rstat = (HASH_SEQ_STATUS *) funcctx->user_fctx;
@@ -1338,11 +1390,17 @@ remove_package(PG_FUNCTION_ARGS)
 	package_name = PG_GETARG_TEXT_PP(0);
 
 	package = getPackage(package_name, true);
+	/*
+	 * Need to remove variables before removing package because
+	 * remove_variables_package() calls hash_seq_term() which uses
+	 * "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removePackageInternal().
+	 */
+	remove_variables_package(&variables_stats, package);
+
 	removePackageInternal(package);
 
 	resetVariablesCache();
-
-	remove_variables_package(&variables_stats, package);
 
 	PG_FREE_IF_COPY(package_name, 0);
 	PG_RETURN_VOID();
@@ -1430,6 +1488,14 @@ remove_packages(PG_FUNCTION_ARGS)
 	if (packagesHash == NULL)
 		PG_RETURN_VOID();
 
+	/*
+	 * Need to remove variables before removing packages because
+	 * remove_variables_all() calls hash_seq_term() which uses
+	 * "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removePackageInternal().
+	 */
+	remove_variables_all(&variables_stats);
+
 	/* Get packages list */
 	hash_seq_init(&pstat, packagesHash);
 	while ((package = (Package *) hash_seq_search(&pstat)) != NULL)
@@ -1438,7 +1504,6 @@ remove_packages(PG_FUNCTION_ARGS)
 	}
 
 	resetVariablesCache();
-	remove_variables_all(&variables_stats);
 
 	PG_RETURN_VOID();
 }
@@ -1653,6 +1718,7 @@ get_packages_stats(PG_FUNCTION_ARGS)
 #ifdef PGPRO_EE
 			entry->levels.atxlevel = getNestLevelATX();
 #endif
+			entry->user_fctx = &funcctx->user_fctx;
 			packages_stats = lcons((void *) entry, packages_stats);
 			MemoryContextSwitchTo(ctx);
 		}
@@ -2152,6 +2218,18 @@ removeObject(TransObject *object, TransObjectType type)
 #ifdef PGPRO_EE
 		PackageContext *context,
 				   *next;
+
+		/*
+		 * Do not delete package inside autonomous transaction: it could be
+		 * used in parent transaction. But we can delete package without any
+		 * states: this means that the package was created in the current
+		 * transaction.
+		 */
+		if (getNestLevelATX() > 0 && !dlist_is_empty(&object->states))
+		{
+			GetActualState(object)->is_valid = false;
+			return;
+		}
 #endif
 
 		package = (Package *) object;
@@ -2171,6 +2249,8 @@ removeObject(TransObject *object, TransObjectType type)
 		while (context)
 		{
 			next = context->next;
+			if (context->hctxTransact)
+				MemoryContextDelete(context->hctxTransact);
 			pfree(context);
 			context = next;
 		}
@@ -2187,13 +2267,19 @@ removeObject(TransObject *object, TransObjectType type)
 			var->package->varHashRegular;
 	}
 
+	/*
+	 * Need to remove variables before removing state because
+	 * remove_variables_variable() calls hash_seq_term() which uses
+	 * "entry->status->hashp->frozen" but memory context of "hashp"
+	 * for regular variables can be deleted in removeState() in freeValue().
+	 */
+	/* Remove object from hash table */
+	hash_search(hash, object->name, HASH_REMOVE, &found);
+	remove_variables_variable(&variables_stats, (Variable*)object);
+
 	/* Remove all object's states */
 	while (!dlist_is_empty(&object->states))
 		removeState(object, type, GetActualState(object));
-
-	/* Remove object from hash table */
-	hash_search(hash, object->name, HASH_REMOVE, &found);
-	remove_variables_variable(&variables_stats, (Variable *) object);
 
 	/* Remove package if it became empty */
 	if (type == TRANS_VARIABLE && isPackageEmpty(package))
@@ -2246,7 +2332,7 @@ numOfRegVars(Package *package)
  * Rollback object to its previous state
  */
 static void
-rollbackSavepoint(TransObject *object, TransObjectType type)
+rollbackSavepoint(TransObject *object, TransObjectType type, bool sub)
 {
 	TransState *state;
 
@@ -2271,7 +2357,14 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
 				/* ...create a new state to make package valid. */
 				initObjectHistory(object, type);
 #ifdef PGPRO_EE
-				GetActualState(object)->levels.atxlevel = getNestLevelATX();
+				/*
+				 * Package inside autonomous transaction should not be detected
+				 * as 'object has been changed in upper level' because in this
+				 * case we will remove state in releaseSavepoint() but this
+				 * state may be used in pgvRestoreContext(). So atxlevel should
+				 * be 0 in case of rollback of autonomous transaction.
+				 */
+				GetActualState(object)->levels.atxlevel = sub ? getNestLevelATX() : 0;
 #endif
 				GetActualState(object)->levels.level = GetCurrentTransactionNestLevel() - 1;
 				if (!dlist_is_empty(changesStack))
@@ -2318,11 +2411,14 @@ rollbackSavepoint(TransObject *object, TransObjectType type)
  * Remove previous state of object
  */
 static void
-releaseSavepoint(TransObject *object, TransObjectType type)
+releaseSavepoint(TransObject *object, TransObjectType type, bool sub)
 {
 	dlist_head *states = &object->states;
 
 	Assert(GetActualState(object)->levels.level == GetCurrentTransactionNestLevel());
+#ifdef PGPRO_EE
+	Assert(GetActualState(object)->levels.atxlevel == getNestLevelATX());
+#endif
 
 	/*
 	 * If the object is not valid and does not exist at a higher level (or if
@@ -2348,6 +2444,15 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 
 		nodeToDelete = dlist_next_node(states, dlist_head_node(states));
 		stateToDelete = dlist_container(TransState, node, nodeToDelete);
+#ifdef PGPRO_EE
+		/*
+		 * We can not delete package state inside autonomous transaction
+		 * because the state can be used in pgvRestoreContext().
+		 * Exception: the state was created within this autonomous transaction.
+		 */
+		Assert(type != TRANS_PACKAGE || getNestLevelATX() == 0 ||
+			   stateToDelete->levels.atxlevel == getNestLevelATX());
+#endif
 		removeState(object, type, stateToDelete);
 	}
 
@@ -2360,6 +2465,12 @@ releaseSavepoint(TransObject *object, TransObjectType type)
 
 	/* Change subxact level due to release */
 	GetActualState(object)->levels.level--;
+
+#ifdef PGPRO_EE
+	/* Change ATX level due to finish autonomous transaction */
+	if (!sub && getNestLevelATX() > 0)
+		GetActualState(object)->levels.atxlevel = 0;
+#endif
 }
 
 static void
@@ -2557,7 +2668,7 @@ typedef enum Action
  * Apply savepoint actions on list of variables or packages.
  */
 static void
-applyAction(Action action, TransObjectType type, dlist_head *list)
+applyAction(Action action, TransObjectType type, dlist_head *list, bool sub)
 {
 	dlist_iter	iter;
 
@@ -2569,7 +2680,7 @@ applyAction(Action action, TransObjectType type, dlist_head *list)
 		switch (action)
 		{
 			case ROLLBACK_TO_SAVEPOINT:
-				rollbackSavepoint(object, type);
+				rollbackSavepoint(object, type, sub);
 				break;
 			case RELEASE_SAVEPOINT:
 
@@ -2587,7 +2698,7 @@ applyAction(Action action, TransObjectType type, dlist_head *list)
 						GetActualState(variable)->is_valid = false;
 				}
 
-				releaseSavepoint(object, type);
+				releaseSavepoint(object, type, sub);
 				break;
 		}
 	}
@@ -2598,7 +2709,7 @@ applyAction(Action action, TransObjectType type, dlist_head *list)
  * apply corresponding action on them
  */
 static void
-processChanges(Action action)
+processChanges(Action action, bool sub)
 {
 	ChangesStackNode *bottom_list;
 
@@ -2607,8 +2718,8 @@ processChanges(Action action)
 	bottom_list = dlist_container(ChangesStackNode, node,
 								  dlist_pop_head_node(changesStack));
 
-	applyAction(action, TRANS_VARIABLE, bottom_list->changedVarsList);
-	applyAction(action, TRANS_PACKAGE, bottom_list->changedPacksList);
+	applyAction(action, TRANS_VARIABLE, bottom_list->changedVarsList, sub);
+	applyAction(action, TRANS_PACKAGE, bottom_list->changedPacksList, sub);
 
 	/* Remove changes list of current level */
 	MemoryContextDelete(bottom_list->ctx);
@@ -2764,19 +2875,35 @@ pgvRestoreContext()
 				PackageContext *next = context->next;
 				TransObject *object = &package->transObject;
 				TransState *state;
+				bool		actual_valid_state;
 
 				/* Restore transactional variables from context */
 				package->hctxTransact = context->hctxTransact;
 				package->varHashTransact = context->varHashTransact;
 
+				/* Save last actual state of package */
+				actual_valid_state = GetActualState(object)->is_valid;
+
 				/* Remove all package states, generated in ATX transaction */
 				while ((state = GetActualState(object)) != context->state)
 				{
+					removeState(object, TRANS_PACKAGE, state);
 					if (dlist_is_empty(&object->states))
 						elog(ERROR, "pg_variables extension can not find "
 							 "transaction state for package");
-					removeState(object, TRANS_PACKAGE, state);
 				}
+
+				/*
+				 * Package could be removed in the autonomous transaction. So
+				 * need to mark it as invalid. Or removed package could be
+				 * re-created - so need to mark it as valid.
+				 */
+				if (actual_valid_state != GetActualState(object)->is_valid)
+					GetActualState(object)->is_valid = actual_valid_state;
+
+				/* Mark empty package as deleted. */
+				if (GetPackState(package)->trans_var_num + numOfRegVars(package) == 0)
+					GetActualState(object)->is_valid = false;
 
 				pfree(context);
 				package->context = next;
@@ -2829,10 +2956,10 @@ pgvSubTransCallback(SubXactEvent event, SubTransactionId mySubid,
 				compatibility_check();
 				break;
 			case SUBXACT_EVENT_COMMIT_SUB:
-				processChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT, true);
 				break;
 			case SUBXACT_EVENT_ABORT_SUB:
-				processChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT, true);
 				break;
 			case SUBXACT_EVENT_PRE_COMMIT_SUB:
 				break;
@@ -2859,16 +2986,16 @@ pgvTransCallback(XactEvent event, void *arg)
 		{
 			case XACT_EVENT_PRE_COMMIT:
 				compatibility_check();
-				processChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT, false);
 				break;
 			case XACT_EVENT_ABORT:
-				processChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT, false);
 				break;
 			case XACT_EVENT_PARALLEL_PRE_COMMIT:
-				processChanges(RELEASE_SAVEPOINT);
+				processChanges(RELEASE_SAVEPOINT, false);
 				break;
 			case XACT_EVENT_PARALLEL_ABORT:
-				processChanges(ROLLBACK_TO_SAVEPOINT);
+				processChanges(ROLLBACK_TO_SAVEPOINT, false);
 				break;
 			default:
 				break;
@@ -2921,7 +3048,11 @@ freeStatsLists(void)
 	{
 		VariableStatEntry *entry = (VariableStatEntry *) lfirst(cell);
 
+#ifdef PGPRO_EE
+		hash_seq_term_all_levels(entry->status);
+#else
 		hash_seq_term(entry->status);
+#endif
 	}
 
 	variables_stats = NIL;
@@ -2930,7 +3061,11 @@ freeStatsLists(void)
 	{
 		PackageStatEntry *entry = (PackageStatEntry *) lfirst(cell);
 
+#ifdef PGPRO_EE
+		hash_seq_term_all_levels(entry->status);
+#else
 		hash_seq_term(entry->status);
+#endif
 	}
 
 	packages_stats = NIL;
