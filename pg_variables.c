@@ -2206,7 +2206,7 @@ removeState(TransObject *object, TransObjectType type, TransState *stateToDelete
 }
 
 /* Remove package or variable (either transactional or regular) */
-void
+bool
 removeObject(TransObject *object, TransObjectType type)
 {
 	bool		found;
@@ -2228,7 +2228,7 @@ removeObject(TransObject *object, TransObjectType type)
 		if (getNestLevelATX() > 0 && !dlist_is_empty(&object->states))
 		{
 			GetActualState(object)->is_valid = false;
-			return;
+			return false;
 		}
 #endif
 
@@ -2289,6 +2289,8 @@ removeObject(TransObject *object, TransObjectType type)
 	}
 
 	resetVariablesCache();
+
+	return true;
 }
 
 /*
@@ -2429,8 +2431,8 @@ releaseSavepoint(TransObject *object, TransObjectType type, bool sub)
 		 dlist_is_empty(changesStack))
 		)
 	{
-		removeObject(object, type);
-		return;
+		if (removeObject(object, type))
+			return;
 	}
 
 	/*

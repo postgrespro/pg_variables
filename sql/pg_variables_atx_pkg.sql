@@ -215,3 +215,24 @@ ROLLBACK;
 SELECT pgv_remove('vars1', 'int1');
 
 SELECT pgv_free();
+--
+--
+-- PGPRO-7856
+-- Test for case: we don't remove the package object without any variables at
+-- the end of autonomous transaction but need to move the state of this object
+-- to upper level.
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+		SAVEPOINT sp1;
+		SELECT pgv_set('vars2', 'any1', 'variable exists'::text, true);
+		SELECT pgv_free();
+		RELEASE sp1;
+	ROLLBACK;
+
+	BEGIN AUTONOMOUS;
+		SAVEPOINT sp2;
+		SAVEPOINT sp3;
+		SELECT pgv_free();
+	COMMIT;
+ROLLBACK;

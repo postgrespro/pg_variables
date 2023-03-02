@@ -474,3 +474,42 @@ SELECT pgv_free();
  
 (1 row)
 
+--
+--
+-- PGPRO-7856
+-- Test for case: we don't remove the package object without any variables at
+-- the end of autonomous transaction but need to move the state of this object
+-- to upper level.
+--
+BEGIN;
+	BEGIN AUTONOMOUS;
+ERROR:  syntax error at or near "AUTONOMOUS"
+LINE 1: BEGIN AUTONOMOUS;
+              ^
+		SAVEPOINT sp1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		SELECT pgv_set('vars2', 'any1', 'variable exists'::text, true);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		SELECT pgv_free();
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+		RELEASE sp1;
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+	ROLLBACK;
+	BEGIN AUTONOMOUS;
+ERROR:  syntax error at or near "AUTONOMOUS"
+LINE 1: BEGIN AUTONOMOUS;
+              ^
+		SAVEPOINT sp2;
+ERROR:  SAVEPOINT can only be used in transaction blocks
+		SAVEPOINT sp3;
+ERROR:  SAVEPOINT can only be used in transaction blocks
+		SELECT pgv_free();
+ pgv_free 
+----------
+ 
+(1 row)
+
+	COMMIT;
+WARNING:  there is no transaction in progress
+ROLLBACK;
+WARNING:  there is no transaction in progress

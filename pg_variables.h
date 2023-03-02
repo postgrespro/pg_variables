@@ -193,7 +193,7 @@ extern bool update_record(Variable *variable, HeapTupleHeader tupleHeader);
 extern bool delete_record(Variable *variable, Datum value, bool is_null);
 extern void insert_record_copy(RecordVar *dest_record, Datum src_tuple,
 							   Variable *variable);
-extern void removeObject(TransObject *object, TransObjectType type);
+extern bool removeObject(TransObject *object, TransObjectType type);
 
 #define GetActualState(object) \
 	(dlist_head_element(TransState, node, &((TransObject *) object)->states))
