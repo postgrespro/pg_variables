@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #
-# Copyright (c) 2018-2022, Postgres Professional
+# Copyright (c) 2018-2024, Postgres Professional
 #
 # supported levels:
 #		* standard
