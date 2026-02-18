@@ -211,7 +211,9 @@ coerce_unknown_rewrite_tupdesc(TupleDesc old_tupdesc, TupleDesc *return_tupdesc)
 			new_attr.attlen = -1;
 			new_attr.atttypmod = -1;
 			memcpy(TupleDescAttr((*return_tupdesc), i), &new_attr, sizeof(FormData_pg_attribute));
+#if PG_VERSION_NUM >= 180000
 			populate_compact_attribute(*return_tupdesc, i);
+#endif			
 		}
 	}
 }
