@@ -3,7 +3,7 @@
  * pg_variables.c
  *	  Functions, which get or set variables values
  *
- * Copyright (c) 2015-2022, Postgres Professional
+ * Copyright (c) 2015-2024, Postgres Professional
  *
  *-------------------------------------------------------------------------
  */

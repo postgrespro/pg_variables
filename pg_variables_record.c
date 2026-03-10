@@ -3,7 +3,7 @@
  * pg_variables_record.c
  *	  Functions to work with record types
  *
- * Copyright (c) 2015-2022, Postgres Professional
+ * Copyright (c) 2015-2024, Postgres Professional
  *
  *-------------------------------------------------------------------------
  */
