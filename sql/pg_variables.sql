@@ -283,3 +283,18 @@ SELECT pgv_select('vars', 'r4');
 SELECT pgv_insert('vars', 'r5', foo) FROM foo; -- types: int, text
 SELECT pgv_insert('vars', 'r5', row(1, 'str1')); -- ok, UNKNOWNOID of 'str1' converts to TEXTOID
 SELECT pgv_select('vars', 'r5');
+
+-- An unknown literal in the first row is stored as text in later reads and updates.
+DO $$
+DECLARE
+    stored text;
+BEGIN
+    PERFORM pgv_insert('coercion', 'rows', ROW(1, 'first'));
+    PERFORM pgv_update('coercion', 'rows', ROW(1, 'second'::text));
+    SELECT value INTO stored
+      FROM pgv_select('coercion', 'rows') AS t(id integer, value text);
+    IF stored IS DISTINCT FROM 'second' THEN
+        RAISE EXCEPTION 'unexpected stored text: %', stored;
+    END IF;
+END
+$$;

@@ -1026,3 +1026,17 @@ SELECT pgv_select('vars', 'r5');
  (0,str00)
 (2 rows)
 
+-- An unknown literal in the first row is stored as text in later reads and updates.
+DO $$
+DECLARE
+    stored text;
+BEGIN
+    PERFORM pgv_insert('coercion', 'rows', ROW(1, 'first'));
+    PERFORM pgv_update('coercion', 'rows', ROW(1, 'second'::text));
+    SELECT value INTO stored
+      FROM pgv_select('coercion', 'rows') AS t(id integer, value text);
+    IF stored IS DISTINCT FROM 'second' THEN
+        RAISE EXCEPTION 'unexpected stored text: %', stored;
+    END IF;
+END
+$$;
