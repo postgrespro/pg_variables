@@ -205,17 +205,14 @@ coerce_unknown_rewrite_tupdesc(TupleDesc old_tupdesc, TupleDesc *return_tupdesc)
 
 		if (attr->atttypid == UNKNOWNOID)
 		{
-			FormData_pg_attribute new_attr = *attr;
-
-			new_attr.atttypid = TEXTOID;
-			new_attr.attlen = -1;
-			new_attr.atttypmod = -1;
-			memcpy(TupleDescAttr((*return_tupdesc), i), &new_attr, sizeof(FormData_pg_attribute));
-#if PG_VERSION_NUM >= 180000
-			populate_compact_attribute(*return_tupdesc, i);
-#endif			
+			TupleDescInitEntry(*return_tupdesc, i + 1, NameStr(attr->attname),
+							   TEXTOID, -1, attr->attndims);
 		}
 	}
+	/* The rewritten anonymous row needs its own registered typmod. */
+	(*return_tupdesc)->tdtypeid = RECORDOID;
+	(*return_tupdesc)->tdtypmod = -1;
+	BlessTupleDesc(*return_tupdesc);
 }
 
 /*
@@ -246,7 +243,7 @@ reconstruct_tuple(TupleDesc old_tupdesc, TupleDesc new_tupdesc, HeapTupleHeader 
 	{
 		Form_pg_attribute attr = GetTupleDescAttr(old_tupdesc, i);
 
-		if (attr->atttypid == UNKNOWNOID)
+		if (!isnull[i] && attr->atttypid == UNKNOWNOID)
 		{
 			values[i] = stringTypeDatum(baseType,
 										DatumGetCString(values[i]),
@@ -354,35 +351,13 @@ check_record_key(Variable *variable, Oid typid)
 static Datum
 copy_record_tuple(RecordVar *record, HeapTupleHeader tupleHeader)
 {
-	TupleDesc	tupdesc;
-	HeapTupleHeader result;
-	int			tuple_len;
+	HeapTupleData tuple = {0};
 
-	tupdesc = record->tupdesc;
+	tuple.t_len = HeapTupleHeaderGetDatumLength(tupleHeader);
+	tuple.t_data = tupleHeader;
 
-	/*
-	 * If the tuple contains any external TOAST pointers, we have to inline
-	 * those fields to meet the conventions for composite-type Datums.
-	 */
-	if (HeapTupleHeaderHasExternal(tupleHeader))
-		return toast_flatten_tuple_to_datum(tupleHeader,
-											HeapTupleHeaderGetDatumLength(tupleHeader),
-											tupdesc);
-
-	/*
-	 * Fast path for easy case: just make a palloc'd copy and insert the
-	 * correct composite-Datum header fields (since those may not be set if
-	 * the given tuple came from disk, rather than from heap_form_tuple).
-	 */
-	tuple_len = HeapTupleHeaderGetDatumLength(tupleHeader);
-	result = (HeapTupleHeader) palloc(tuple_len);
-	memcpy((char *) result, (char *) tupleHeader, tuple_len);
-
-	HeapTupleHeaderSetDatumLength(result, tuple_len);
-	HeapTupleHeaderSetTypeId(result, tupdesc->tdtypeid);
-	HeapTupleHeaderSetTypMod(result, tupdesc->tdtypmod);
-
-	return PointerGetDatum(result);
+	/* Let PostgreSQL preserve or validate composite datum version information. */
+	return heap_copy_tuple_as_datum(&tuple, record->tupdesc);
 }
 
 static Datum
