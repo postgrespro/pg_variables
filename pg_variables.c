@@ -122,7 +122,6 @@ do { \
 #endif							/* PG_VERSION_NUM */
 
 /* User controlled GUCs */
-bool convert_unknownoid_guc;
 bool convert_unknownoid;
 
 static HTAB *packagesHash = NULL;

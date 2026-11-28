@@ -204,8 +204,14 @@ extern bool removeObject(TransObject *object, TransObjectType type);
 #define GetPackState(package) \
 	(((PackState *) GetActualState(package)))
 
+#if PG_VERSION_NUM >= 190000
+#define GetName(object) \
+	(StaticAssertVariableIsOfTypeMacro(object->transObject, TransObject), \
+	 object->transObject.name)
+#else
 #define GetName(object) \
 	(AssertVariableIsOfTypeMacro(object->transObject, TransObject), \
 	 object->transObject.name)
+#endif
 
 #endif							/* __PG_VARIABLES_H__ */

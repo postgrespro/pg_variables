@@ -382,6 +382,8 @@ copy_record_tuple(RecordVar *record, HeapTupleHeader tupleHeader)
 	HeapTupleHeaderSetTypeId(result, tupdesc->tdtypeid);
 	HeapTupleHeaderSetTypMod(result, tupdesc->tdtypmod);
 
+	ItemPointerSetInvalid(&result->t_ctid);
+
 	return PointerGetDatum(result);
 }
 
@@ -390,7 +392,7 @@ get_record_key(Datum tuple, TupleDesc tupdesc, bool *isnull)
 {
 	HeapTupleHeader th = (HeapTupleHeader) DatumGetPointer(tuple);
 	bool		hasnulls = th->t_infomask & HEAP_HASNULL;
-	bits8	   *bp = th->t_bits;	/* ptr to null bitmap in tuple */
+	uint8_t	   *bp = th->t_bits;	/* ptr to null bitmap in tuple */
 	char	   *tp;				/* ptr to tuple data */
 	long		off;			/* offset in tuple data */
 	int			keyatt = 0;
