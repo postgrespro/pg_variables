@@ -382,6 +382,8 @@ copy_record_tuple(RecordVar *record, HeapTupleHeader tupleHeader)
 	HeapTupleHeaderSetTypeId(result, tupdesc->tdtypeid);
 	HeapTupleHeaderSetTypMod(result, tupdesc->tdtypmod);
 
+	ItemPointerSetInvalid(&result->t_ctid);
+
 	return PointerGetDatum(result);
 }
 
